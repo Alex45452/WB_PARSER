@@ -1,0 +1,5 @@
+.env
+.venv
+settings.py
+*test*
+*ipynb*
