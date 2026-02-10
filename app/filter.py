@@ -1,53 +1,6 @@
+from settings import ANTI_WORDS_HARD,ANTI_WORDS_SOFT,KW_FILENAME,SUP_FILENAME,SCORE_FILTER
 import re
 
-SCORE_FILTER = 0.9
-KW_FILENAME = "keywords.txt"
-SUP_FILENAME = "suppliers.txt"
-
-ANTI_WORDS_HARD = {
-    "чехол","case","кейс","бампер","накладка","обложка","флип","flip",
-    "книжка","кобура","футляр","сумка","карман","папка","мешок",
-
-    "стекло","стеклышко","стеклянное","пленка","плёнка","гидрогелевая",
-    "гидрогель","антибликовая","антишпион","privacy","protective","защитная",
-
-    "кабель","провод","шнур","зарядка","зарядное","адаптер","блок",
-    "блокпитания","powerbank","power","аккумулятор","акб","батарея","battery",
-
-    "запчасть","запчасти","деталь","детали","ремонт","ремкомплект",
-    "шлейф","разъем","разъём","коннектор","плата","микросхема","чип",
-    "корпус","крышка","стеклоэкрана","дисплей","экран","тачскрин",
-
-    "игра","game","диск","cd","dvd","ключ","код","активация",
-    "подписка","subscription","psn","xbox","license","лицензия",
-
-    "бу","б/у","used","refurb","refurbished","восстановленный",
-    "восстановлен","уценка","уцененный","витринный","демо","demo",
-
-    "копия","реплика","аналог","fake","неоригинал","совместимый",
-    "replacement","oem",
-
-    "набор","сет","bundle","kit","комплект","без","безкоробки",
-    "безупаковки","no",
-
-    "держатель","подставка","крепление","штатив","стойка","рамка",
-
-    "доставка","гарантия","страховка","услуга","настройка","чистка","аксессуар",
-    "без коробки","без упаковки","как новый"
-}
-
-ANTI_WORDS_SOFT = {
-    "для","под","совместим","подходит","ориг","original",
-    "brand","new","новинка","хит","топ","sale","скидка",
-
-    "cn","china","hk","global","версии","версия",
-
-    "упаковка","пломба","запечатан",
-
-    "идеал","отличный","новый","полный комплект",
-
-    "официальный","сертифицирован","гарантийный","магазин","продавец"
-}
 
 SAMSUNG_KW_AW = {}
 IPHONE_KW_AW = {}
@@ -87,15 +40,14 @@ def upload_suppliers():
 def create_anitiwods(category):
     all_kw = set()
     for kw in category.values():
-        all_kw.add(kw)
+        all_kw.update(kw[0])
     for name,kw in category.items():
-        aw = list(all_kw.difference(kw))
+        aw = list(all_kw.difference(kw[0]))
         category[name].append(aw)
 
 def upload_antiwords():
     for category in CATEGORIES:
-        ...
-    ...
+        create_anitiwods(category)
     # todo db antiwords uploading
 
 def filter_uploader():
@@ -103,11 +55,11 @@ def filter_uploader():
     upload_antiwords()
 
 def normalize_name(name: str):
-    name = name.lower
+    name = name.lower()
     name = name.replace('+'," plus ")
     name = re.sub(r"[^a-z0-9а-я\s]", " ", name)
     name = re.sub(r"\s+", " ", name)
-    return name.split()
+    return set(name.split())
 
 def choose_kw_part(name_tokens):
     if "samsung" in name_tokens:
@@ -126,11 +78,12 @@ def has_anti_words(tokens):
     return any(t in ANTI_WORDS_HARD for t in tokens)
 
 def name_score(name_tokens, pattern_tokens):
-    matched_cnt = sum(1 for t in pattern_tokens if t in name_tokens)
-    if "samsung" in pattern_tokens: 
+    matched_cnt = sum(1 for t in pattern_tokens[0] if t in name_tokens)
+    if "samsung" in pattern_tokens[0]: 
         matched_cnt += 0.95
     penalty_score = sum(0.1 for t in ANTI_WORDS_SOFT if t in name_tokens)
-    return matched_cnt / len(pattern_tokens) - penalty_score
+    penalty_score += sum(0.2 for t in pattern_tokens[1] if t in name_tokens)
+    return matched_cnt / len(pattern_tokens[0]) - penalty_score
 
 def check_name(name):
     normal_name = normalize_name(name)
@@ -145,7 +98,7 @@ def check_name(name):
 
 def filter_result(parser_res):
     sup_name = checked_suppliers_db.get(parser_res["sup_name"],False)
-    item_name = check_name(parser_res["name"])
+    item_name = check_name(parser_res["item_name"])
     if item_name and sup_name:
         return {
             "sup_name":sup_name,

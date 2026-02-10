@@ -1,5 +1,7 @@
 import httpx
 import filter
+from settings import CUR_BASKET_ID
+
 
 sup_db = {} # db of suppliers_id:supplier
 
@@ -18,7 +20,7 @@ def get_sup(sup_id):
         name = parse_sup_name(url)
         if not name:
             return False
-        sup-db[sup_id] = name
+        sup_db[sup_id] = name
     return name
 
 def parse_item(url):
@@ -30,14 +32,15 @@ def parse_item(url):
     if not sup_name:
         return False
     return {
-        "id":card["imt_name"], 
+        "item_name":card["imt_name"], 
         "sup_name":sup_name
         }
 
 
 def parser(vol,part,pos): # return id of item
     # rewrite parser with yield
-    url = f"https://basket-{CUR_BASKET_ID}.wbbasket.ru/vol{vol}/part{vol}{part}/{vol}{part}{pos}/info/ru/card.json"
+    global CUR_BASKET_ID
+    url = f"https://basket-{CUR_BASKET_ID}.wbbasket.ru/vol{vol:0>4}/part{vol:0>4}{part:0>2}/{vol:0>4}{part:0>2}{pos:0>3}/info/ru/card.json"
     parser_result = parse_item(url)
     if not parser_result:
         CUR_BASKET_ID += 1
@@ -49,5 +52,5 @@ def parser(vol,part,pos): # return id of item
         filter_res = filter.filter_result(parser_result)
         # return filter_res["sup_name"],filter_res["item_name"], f"{vol}{part}{pos}"
         if filter_res:
-            return  f"{vol}{part}{pos}", filter_res
+            return  f"{vol}{part}{pos}",filter_res["sup_name"],filter_res["item_name"]
         return False
