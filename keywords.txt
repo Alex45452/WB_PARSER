@@ -1,31 +1,65 @@
-iPhone 17
-iPhone Air
-Samsung Z Fold7
-iPad 11
-iPad Air 11
-iPad Air 13
-Steam Deck Oled
+iPhone 17 Pro Max 2TB Sim+eSim
+iPhone 17 Pro Max 1TB Sim+eSim
+iPhone 17 Pro Max 512 Sim+eSim
+iPhone 17 Pro Max 256 Sim+eSim
+iPhone 17 Pro 256 Sim+eSim
+iPhone 17 Pro 1TB Sim+eSim
+iPhone 17 Pro 512 Sim+eSim
+iPhone 17 512 Sim+eSim
+iPhone 17 256 Sim+eSim
+iPhone Air 1 TB
+iPhone Air 512
+iPhone Air 256
+Samsung Z Fold7 256
+Samsung Z Fold7 512
+Samsung Z Fold7 1 TB
+iPad 11 128 Wi-Fi
+iPad 11 256 Wi-Fi
+iPad 11 128 LTE
+iPad 11 256 LTE
+iPad Air 11 M3 128 
+iPad Air 11 M3 256 
+iPad Air 13 M3 128 
+iPad Air 13 M3 256
+iPad Air 11 2025 128
+iPad Air 11 2025 256
+Steam Deck Oled 512
 PS5 Slim Disk
 PS5 Slim Digital
 Playstation 5 Pro
 PS5 Pro
-S25 FE
-S25
-S25+
-S25 Ultra
-A16
-A36
-A56
-Pura 80 Pro
-Pura 80
+Samsung S25 FE 8/256
+Samsung S25 FE 8/512
+Samsung S25 12/128
+Samsung S25 12/256
+Samsung S25+ 12/256
+Samsung S25+ 12/512
+Samsung S25 Ultra 12/256
+Samsung S25 Ultra 12/512
+Samsung A56 8/128
+Samsung A56 8/256
+Samsung A56 12/256
+Huawei Pura 80 Pro 12/512
+Huawei Pura 80 12/256
 Яндекс Макс
 Яндекс Дуо Макс
 Яндекс Миди
 Яндекс Мини 3
 Яндекс Лайт
+Яндекс Lite
 Яндекс Лайт 2
+Яндекс Lite 2 с часами
+Яндекс лайт 2 с часами
 Яндекс стрит
-MacBook Air 13 M1
-MacBook Air 13 M2
-MacBook Air 13 M4
-MacBook Air 15 M4
+MacBook Air 13 M1 256 Space Gray
+MacBook Air 13 M1 256 Gold
+MacBook Air 13 M1 256 Silver
+MacBook Air 13 M2 16/256
+MacBook Air 13 M2 8/512
+MacBook Air 13 M4 16/256
+MacBook Air 13 M4 16/512
+MacBook Air 15 M4 16/256
+MacBook Air 15 M4 16/512
+MacBook Pro 14 M4 16/512
+MacBook Pro 14 M4 Pro 24/512
+MacBook Pro 14 M5 16/1Tb

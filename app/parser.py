@@ -1,7 +1,7 @@
 import httpx
 import filter
 
-sup-db = {} # db of suppliers_id:supplier
+sup_db = {} # db of suppliers_id:supplier
 
 def parse_sup_name(url):
     r = httpx.get(url)
@@ -12,7 +12,7 @@ def parse_sup_name(url):
     
 
 def get_sup(sup_id):
-    name = sup-db.get(id,False)
+    name = sup_db.get(id,False)
     if not name:
         url = f"https://static-basket-01.wbbasket.ru/vol0/data/supplier-by-id/{sup_id}.json" #to_constants
         name = parse_sup_name(url)
