@@ -97,7 +97,10 @@ def check_name(name):
     return False
 
 def filter_result(parser_res):
-    sup_name = checked_suppliers_db.get(parser_res["sup_name"],False)
+    sup_name = parser_res["sup_name"]
+    # sup_name = checked_suppliers_db.get(parser_res["sup_name"],False)
+    # todo supplier check
+    
     item_name = check_name(parser_res["item_name"])
     if item_name and sup_name:
         return {

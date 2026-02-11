@@ -1,16 +1,21 @@
 import httpx
 import filter
+import time
 from settings import CUR_BASKET_ID
 
 
 sup_db = {} # db of suppliers_id:supplier
 
 def parse_sup_name(url):
-    r = httpx.get(url)
+    try:
+        r = httpx.get(url)
+    except OSError:
+        time.sleep(1)
+        return False
     if r.status_code != httpx.codes.OK:
         return False
     card = r.json()
-    return card["trademark"]
+    return card.get("trademark",card.get('supplierName',False))
     
 
 def get_sup(sup_id):
@@ -24,7 +29,11 @@ def get_sup(sup_id):
     return name
 
 def parse_item(url):
-    r = httpx.get(url)
+    try:
+        r = httpx.get(url)
+    except OSError:
+        time.sleep(1)
+        return False
     if r.status_code != httpx.codes.OK:
         return False
     card = r.json()
