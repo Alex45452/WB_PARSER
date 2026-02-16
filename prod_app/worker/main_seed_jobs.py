@@ -10,8 +10,9 @@ ON CONFLICT (basket) DO UPDATE SET start_nm=EXCLUDED.start_nm, end_nm=EXCLUDED.e
 """
 
 INSERT_JOB = """
-INSERT INTO scan_jobs(start_nm,end_nm,basket,status)
-VALUES ($1,$2,$3,'queued');
+INSERT INTO scan_jobs(start_nm, end_nm, basket, status)
+VALUES ($1,$2,$3,'queued')
+ON CONFLICT (basket, start_nm, end_nm) DO NOTHING;
 """
 
 CHUNK = 2_000_000
