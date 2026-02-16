@@ -1,7 +1,7 @@
 import asyncio
 import asyncpg
 from .config import Settings
-from ..data.basket_ranges import RANGES_EXACT
+from .basket_ranges import RANGES_EXACT
 
 UPSERT_RANGE = """
 INSERT INTO basket_ranges(basket,start_nm,end_nm)
