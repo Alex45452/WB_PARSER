@@ -1,6 +1,8 @@
 import asyncio
+import os
 import random
 import time
+from collections import defaultdict, deque
 from dataclasses import dataclass
 from typing import Dict, List, Tuple
 
@@ -14,7 +16,6 @@ except Exception:
     import json as jsonlib
     def loads(b: bytes): return jsonlib.loads(b)
 
-# --- твоя карта ---
 RANGES_EXACT: List[Tuple[int, int, int]] = [
     (156955254, 165599999, 10),
     (165600000, 191999999, 12),
@@ -47,132 +48,203 @@ def card_url(nm_id: int, basket: int) -> str:
     part = nm_id // 1000
     return f"https://basket-{basket:02d}.wbbasket.ru/vol{vol}/part{part}/{nm_id}/info/ru/card.json"
 
-def pick_random_nmids(n: int, ranges: List[Tuple[int, int, int]]) -> List[Tuple[int, int]]:
-    # равномерно по ranges
-    out = []
-    for _ in range(n):
-        start, end, basket = random.choice(ranges)
-        nm_id = random.randint(start, end)
-        out.append((nm_id, basket))
-    return out
+def pick_one() -> Tuple[int, int]:
+    start, end, basket = random.choice(RANGES_EXACT)
+    return random.randint(start, end), basket
 
 @dataclass
-class BenchResult:
-    concurrency: int
-    requests: int
-    seconds: float
-    rps: float
-    p50_ms: float
-    p90_ms: float
-    p99_ms: float
-    status_counts: Dict[int, int]
-    errors: int
-    timeouts: int
+class Stats:
+    ok: int = 0
+    not_found: int = 0
+    rate_limited: int = 0
+    other_status: int = 0
+    timeouts: int = 0
+    errors: int = 0
+    bytes_rx: int = 0
 
-def percentile(sorted_vals: List[float], p: float) -> float:
-    if not sorted_vals:
-        return 0.0
-    k = int((len(sorted_vals) - 1) * p)
-    return sorted_vals[k]
+class LatencyWindow:
+    def __init__(self, maxlen: int = 5000):
+        self.data = deque(maxlen=maxlen)
 
-async def one_request(session: aiohttp.ClientSession, url: str, parse_json: bool, timeout_s: float):
+    def add_ms(self, v: float):
+        self.data.append(v)
+
+    def percentiles(self):
+        if not self.data:
+            return 0.0, 0.0, 0.0
+        arr = sorted(self.data)
+        def p(q): return arr[int((len(arr)-1)*q)]
+        return p(0.50), p(0.90), p(0.99)
+
+async def fetch_one(session, nm_id: int, basket: int, parse_json: bool, timeout_s: float):
+    url = card_url(nm_id, basket)
     t0 = time.perf_counter()
     try:
         async with session.get(url, timeout=timeout_s) as resp:
             status = resp.status
             body = await resp.read()
-            if parse_json and status == 200:
-                # минимальный parse (имитируем “реальную” нагрузку)
-                _ = loads(body)
             dt = (time.perf_counter() - t0) * 1000
-            return status, dt, False, False
+            if parse_json and status == 200:
+                _ = loads(body)
+            return status, dt, len(body), False, False
     except asyncio.TimeoutError:
         dt = (time.perf_counter() - t0) * 1000
-        return 0, dt, False, True
+        return 0, dt, 0, False, True
     except Exception:
         dt = (time.perf_counter() - t0) * 1000
-        return 0, dt, True, False
+        return 0, dt, 0, True, False
 
-async def run_bench(concurrency: int, total_requests: int, parse_json: bool, timeout_s: float) -> BenchResult:
-    connector = aiohttp.TCPConnector(limit=concurrency, ttl_dns_cache=300)
+async def worker_loop(
+    session,
+    sem: asyncio.Semaphore,
+    stats: Stats,
+    lat: LatencyWindow,
+    stop_at: float,
+    parse_json: bool,
+    timeout_s: float,
+):
+    # простая retry-логика для 0/timeout/5xx/429
+    while time.perf_counter() < stop_at:
+        nm_id, basket = pick_one()
+
+        async with sem:
+            status, dt, nbytes, is_err, is_to = await fetch_one(session, nm_id, basket, parse_json, timeout_s)
+
+        lat.add_ms(dt)
+        stats.bytes_rx += nbytes
+
+        if status == 200:
+            stats.ok += 1
+        elif status == 404:
+            stats.not_found += 1
+        elif status == 429:
+            stats.rate_limited += 1
+            # backoff
+            await asyncio.sleep(0.05 + random.random() * 0.1)
+        elif status == 0:
+            if is_to:
+                stats.timeouts += 1
+                await asyncio.sleep(0.02 + random.random() * 0.05)
+            elif is_err:
+                stats.errors += 1
+                await asyncio.sleep(0.02 + random.random() * 0.05)
+            else:
+                stats.errors += 1
+        else:
+            stats.other_status += 1
+
+async def monitor_loop(
+    stats: Stats,
+    lat: LatencyWindow,
+    start_t: float,
+    stop_at: float,
+    adjust_cb,
+    interval_s: float = 5.0,
+):
+    prev_total = 0
+    prev_t = start_t
+    while True:
+        now = time.perf_counter()
+        if now >= stop_at:
+            break
+
+        total = stats.ok + stats.not_found + stats.rate_limited + stats.other_status + stats.timeouts + stats.errors
+        dt = now - prev_t
+        dreq = total - prev_total
+        rps = dreq / dt if dt > 0 else 0.0
+
+        p50, p90, p99 = lat.percentiles()
+
+        err = stats.errors + stats.timeouts
+        err_pct = (err / total * 100) if total else 0.0
+        rl_pct = (stats.rate_limited / total * 100) if total else 0.0
+
+        mbps = (stats.bytes_rx * 8) / (now - start_t) / 1e6 if (now - start_t) > 0 else 0.0
+
+        print(
+            f"[{(now-start_t):5.0f}s] rps={rps:7.1f}  p50={p50:6.1f} p90={p90:6.1f} p99={p99:6.1f}  "
+            f"err%={err_pct:5.2f}  429%={rl_pct:5.2f}  mbps~={mbps:5.1f}  "
+            f"ok={stats.ok} 404={stats.not_found} to={stats.timeouts} err={stats.errors}"
+        )
+
+        # авто-регулирование concurrency
+        adjust_cb(p99_ms=p99, err_pct=err_pct, rl_pct=rl_pct)
+
+        prev_total = total
+        prev_t = now
+        await asyncio.sleep(interval_s)
+
+async def main():
+    # Настройки (меняй через env)
+    duration_s = int(os.getenv("DURATION", "180"))
+    parse_json = os.getenv("PARSE_JSON", "1") == "1"
+    timeout_s = float(os.getenv("TIMEOUT", "6"))
+    start_concurrency = int(os.getenv("CONC", "400"))
+    min_conc = int(os.getenv("MIN_CONC", "200"))
+    max_conc = int(os.getenv("MAX_CONC", "900"))
+    tasks = int(os.getenv("TASKS", "1200"))  # число воркеров-корутин (обычно = max_conc или чуть выше)
+
+    # Цели авто-тюнинга
+    target_p99 = float(os.getenv("TARGET_P99_MS", "1800"))
+    max_err_pct = float(os.getenv("MAX_ERR_PCT", "0.2"))
+
+    sem = asyncio.Semaphore(start_concurrency)
+    current_conc = {"v": start_concurrency}
+
+    def adjust_cb(p99_ms: float, err_pct: float, rl_pct: float):
+        # если плохо — уменьшаем резко
+        if err_pct > max_err_pct or p99_ms > target_p99:
+            newv = max(min_conc, int(current_conc["v"] * 0.85))
+        else:
+            # если хорошо — растём медленно
+            newv = min(max_conc, current_conc["v"] + 20)
+
+        if newv != current_conc["v"]:
+            # обновляем semaphore: делаем это аккуратно (через разницу)
+            diff = newv - current_conc["v"]
+            current_conc["v"] = newv
+            if diff > 0:
+                for _ in range(diff):
+                    sem.release()
+            else:
+                # "забираем" пермиты постепенно
+                # (просто не даём новым задачам быстро заходить)
+                pass
+
+    connector = aiohttp.TCPConnector(limit=0, ttl_dns_cache=300)  # limit=0 => без ограничения, контролируем семафором
     headers = {
         "User-Agent": "Mozilla/5.0",
         "Accept": "application/json",
+        "Accept-Encoding": "gzip, deflate, br",
         "Connection": "keep-alive",
     }
 
-    latencies = []
-    status_counts: Dict[int, int] = {}
-    errors = 0
-    timeouts = 0
+    stats = Stats()
+    lat = LatencyWindow(maxlen=8000)
 
-    sem = asyncio.Semaphore(concurrency)
-
-    nmids = pick_random_nmids(total_requests, RANGES_EXACT)
+    start_t = time.perf_counter()
+    stop_at = start_t + duration_s
 
     async with aiohttp.ClientSession(connector=connector, headers=headers) as session:
-        start = time.perf_counter()
+        workers = [
+            asyncio.create_task(worker_loop(session, sem, stats, lat, stop_at, parse_json, timeout_s))
+            for _ in range(tasks)
+        ]
+        mon = asyncio.create_task(monitor_loop(stats, lat, start_t, stop_at, adjust_cb))
 
-        async def worker(nm_id: int, basket: int):
-            nonlocal errors, timeouts
-            url = card_url(nm_id, basket)
-            async with sem:
-                status, dt_ms, is_error, is_timeout = await one_request(session, url, parse_json, timeout_s)
-            latencies.append(dt_ms)
-            status_counts[status] = status_counts.get(status, 0) + 1
-            if is_error:
-                errors += 1
-            if is_timeout:
-                timeouts += 1
+        await asyncio.gather(*workers)
+        await mon
 
-        tasks = [asyncio.create_task(worker(nm, b)) for nm, b in nmids]
-        await asyncio.gather(*tasks)
-
-        seconds = time.perf_counter() - start
-
-    latencies.sort()
-    p50 = percentile(latencies, 0.50)
-    p90 = percentile(latencies, 0.90)
-    p99 = percentile(latencies, 0.99)
-
-    rps = total_requests / seconds if seconds > 0 else 0.0
-
-    return BenchResult(
-        concurrency=concurrency,
-        requests=total_requests,
-        seconds=seconds,
-        rps=rps,
-        p50_ms=p50,
-        p90_ms=p90,
-        p99_ms=p99,
-        status_counts=status_counts,
-        errors=errors,
-        timeouts=timeouts,
-    )
-
-async def main():
-    # Набор прогонов: сеть vs CPU
-    # 1) parse_json=False — меряем “чистую сеть”
-    # 2) parse_json=True  — меряем “как будет в реальности”
-    levels = [200, 400, 800, 1200, 1600]
-    total = 50_000
-    timeout_s = 6.0
-
-    for parse_json in (False, True):
-        print("\n" + "=" * 80)
-        print("MODE:", "NETWORK_ONLY (no JSON parse)" if not parse_json else "REALISTIC (JSON parse)")
-        print("=" * 80)
-
-        for c in levels:
-            res = await run_bench(concurrency=c, total_requests=total, parse_json=parse_json, timeout_s=timeout_s)
-            print(
-                f"concurrency={res.concurrency}  "
-                f"rps={res.rps:.1f}  "
-                f"time={res.seconds:.1f}s  "
-                f"p50={res.p50_ms:.1f}ms p90={res.p90_ms:.1f}ms p99={res.p99_ms:.1f}ms  "
-                f"errors={res.errors} timeouts={res.timeouts}  "
-                f"statuses={dict(sorted(res.status_counts.items()))}"
-            )
+    # финальный итог
+    total = stats.ok + stats.not_found + stats.rate_limited + stats.other_status + stats.timeouts + stats.errors
+    p50, p90, p99 = lat.percentiles()
+    seconds = time.perf_counter() - start_t
+    rps = total / seconds if seconds > 0 else 0.0
+    err = stats.errors + stats.timeouts
+    print("\n=== FINAL ===")
+    print(f"seconds={seconds:.1f} total={total} rps={rps:.1f} p50={p50:.1f} p90={p90:.1f} p99={p99:.1f}")
+    print(f"ok={stats.ok} 404={stats.not_found} 429={stats.rate_limited} other={stats.other_status} timeouts={stats.timeouts} errors={stats.errors}")
+    print(f"err%={(err/total*100 if total else 0):.3f}%")
 
 if __name__ == "__main__":
     uvloop.install()
