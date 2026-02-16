@@ -5,3 +5,5 @@ settings.py
 *ipynb*
 __pycache__
 *.xlsx
+*.yml
+userlist.txt
