@@ -14,6 +14,12 @@ VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
 ON CONFLICT (nm_id) DO NOTHING;
 """
 
+CHECK_SQL = """
+UPDATE scan_jobs
+SET status='queued', worker_id=NULL
+WHERE status='running' AND updated_at < now() - interval '30 minutes';
+"""
+
 def extract_fields(obj: dict) -> tuple[int | None, str | None, str | None]:
     # WB JSON может отличаться; оставим максимально безопасно
     supplier_id = obj.get("supplierId") or obj.get("supplier_id") or obj.get("selling", {}).get("supplierId")
@@ -98,11 +104,12 @@ async def main_loop():
     import asyncpg
     from .db import create_pool
     from .jobs import claim_jobs, mark_done, mark_failed
-
+    
     pool = await create_pool(cfg)
 
     while True:
         async with pool.acquire() as conn:
+            conn.execute(CHECK_SQL)
             jobs = await claim_jobs(conn, cfg)
             if not jobs:
                 await asyncio.sleep(2)
