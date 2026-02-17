@@ -109,7 +109,7 @@ async def main_loop():
 
     while True:
         async with pool.acquire() as conn:
-            conn.execute(CHECK_SQL)
+            await conn.execute(CHECK_SQL)
             jobs = await claim_jobs(conn, cfg)
             if not jobs:
                 await asyncio.sleep(2)
