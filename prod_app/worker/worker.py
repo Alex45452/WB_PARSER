@@ -197,9 +197,13 @@ async def run_job(cfg: Settings, pool: asyncpg.Pool, job: asyncpg.Record, log: l
                 except asyncio.TimeoutError:
                     metrics.timeouts += 1
                     return
-                except Exception:
+                except Exception as e:
                     metrics.errors += 1
+                    # покажем первые 20 ошибок, дальше — раз в 1000
+                    if metrics.errors <= 20 or metrics.errors % 1000 == 0:
+                        log.warning("http error: %r (%s)", e, type(e).__name__)
                     return
+
 
             supplier_id, title, desc = extract_fields(data)
             if not title:
