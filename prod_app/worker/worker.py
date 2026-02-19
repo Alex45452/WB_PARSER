@@ -35,6 +35,14 @@ FROM unnest(
 ON CONFLICT (nm_id) DO NOTHING;
 """
 
+HEARTBEAT_SQL = """
+UPDATE scan_jobs
+SET updated_at = now()
+WHERE job_id = $1 AND status = 'running';
+"""
+
+
+
 def extract_fields(obj: dict) -> tuple[Optional[int], Optional[str], Optional[str]]:
     supplier_id = obj.get("supplierId") or obj.get("supplier_id") or obj.get("selling", {}).get("supplierId")
     title = obj.get("imt_name") or obj.get("title") or obj.get("name") or obj.get("goodsName")
@@ -173,6 +181,17 @@ async def run_job(cfg: Settings, pool: asyncpg.Pool, job: asyncpg.Record, log: l
                 metrics.inserted_batches, metrics.inserted_rows,
                 queue.qsize(),
             )
+
+    hb_stop = asyncio.Event()
+    async def heartbeat_task():
+        while not hb_stop.is_set():
+            try:
+                async with pool.acquire() as c:
+                    await c.execute(HEARTBEAT_SQL, job_id)
+            except Exception:
+                log.exception("heartbeat failed: job_id=%s", job_id)
+            await asyncio.sleep(15)   # 10-30 секунд норм
+    hb = asyncio.create_task(heartbeat_task())
 
     async with aiohttp.ClientSession(timeout=timeout, connector=connector, headers=headers) as session:
         w = asyncio.create_task(writer_task())
