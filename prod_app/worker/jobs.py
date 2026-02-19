@@ -2,6 +2,17 @@ import asyncpg
 from typing import Optional, Dict, Any
 from .config import Settings
 
+
+MARK_FAILED_SQL = """
+UPDATE scan_jobs
+SET status = 'failed',
+    updated_at = now(),
+    failed_at = now(),
+    fail_reason = $2,
+    fail_trace = $3
+WHERE job_id = $1;
+"""
+
 CLAIM_SQL = """
 WITH cte AS (
   SELECT job_id
@@ -27,5 +38,9 @@ async def claim_jobs(conn: asyncpg.Connection, cfg: Settings):
 async def mark_done(conn: asyncpg.Connection, job_id: int):
     await conn.execute(DONE_SQL, job_id)
 
-async def mark_failed(conn: asyncpg.Connection, job_id: int):
-    await conn.execute(FAIL_SQL, job_id)
+async def mark_failed(conn: asyncpg.Connection, job_id: int, reason: str, trace: str) -> None:
+    # Ограничим размер, чтобы случайно не залить в БД мегабайты
+    reason = (reason or "")[:500]
+    trace = (trace or "")[:8000]
+    await conn.execute(MARK_FAILED_SQL, job_id, reason, trace)
+
