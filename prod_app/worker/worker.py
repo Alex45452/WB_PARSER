@@ -1,8 +1,10 @@
+from __future__ import annotations
+
 import asyncio
-import time
 import logging
+import time
 import traceback
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Dict
 
 import aiohttp
 import asyncpg
@@ -13,7 +15,7 @@ from .wb import card_url
 from .filter import fast_filter
 
 
-# Requeue "зависших" running. Оставляем, но теперь будет heartbeat.
+# Requeue "зависших" running. Теперь будет heartbeat, так что живые job не переочередятся.
 CHECK_SQL = """
 UPDATE scan_jobs
 SET status='queued', worker_id=NULL
@@ -24,6 +26,24 @@ HEARTBEAT_SQL = """
 UPDATE scan_jobs
 SET updated_at = now()
 WHERE job_id = $1 AND status='running';
+"""
+
+# Пишем job-статы + suspicious (ты уже сделал миграцию)
+UPDATE_JOB_STATS_SQL = """
+UPDATE scan_jobs
+SET
+  updated_at = now(),
+  done_at = COALESCE(done_at, now()),
+  stat_req = $2,
+  stat_200 = $3,
+  stat_not200 = $4,
+  stat_timeouts = $5,
+  stat_errors = $6,
+  stat_accepted = $7,
+  stat_db_rows = $8,
+  suspicious = $9,
+  suspicious_reason = $10
+WHERE job_id = $1;
 """
 
 # Один bulk INSERT на батч
@@ -44,6 +64,15 @@ ON CONFLICT (nm_id) DO NOTHING;
 """
 
 
+def _clean_text(s: Optional[str]) -> Optional[str]:
+    if s is None:
+        return None
+    # Postgres text не принимает \x00
+    if "\x00" in s:
+        s = s.replace("\x00", "")
+    return s
+
+
 def extract_fields(obj: dict) -> tuple[Optional[int], Optional[str], Optional[str]]:
     supplier_id = obj.get("supplierId") or obj.get("supplier_id") or obj.get("selling", {}).get("supplierId")
     title = obj.get("imt_name") or obj.get("title") or obj.get("name") or obj.get("goodsName")
@@ -61,54 +90,6 @@ def _make_timeout(cfg: Settings) -> aiohttp.ClientTimeout:
     )
 
 
-class Metrics:
-    __slots__ = (
-        "t0",
-        "req",
-        "ok200",
-        "not200",
-        "timeouts",
-        "errors",
-        "json_errors",
-        "accepted",
-        "queued",
-        "inserted_batches",
-        "inserted_rows",
-    )
-
-    def __init__(self):
-        self.t0 = time.time()
-        self.req = 0
-        self.ok200 = 0
-        self.not200 = 0
-        self.timeouts = 0
-        self.errors = 0
-        self.json_errors = 0
-        self.accepted = 0
-        self.queued = 0
-        self.inserted_batches = 0
-        self.inserted_rows = 0
-
-
-async def bulk_insert(conn: asyncpg.Connection, rows: List[Tuple]):
-    nm_ids, baskets, supplier_ids, titles, descs, product_keys, scores, urls = ([] for _ in range(8))
-
-    for (nm_id, basket, supplier_id, title, desc, product_key, score, url) in rows:
-        nm_ids.append(int(nm_id))
-        baskets.append(int(basket))
-        supplier_ids.append(int(supplier_id) if supplier_id is not None else None)
-        titles.append(_clean_text(title) if title is not None else "")
-        descs.append(_clean_text(desc) if desc is not None else None)
-        product_keys.append(product_key if product_key is not None else None)
-        scores.append(float(score) if score is not None else None)
-        urls.append(url)
-
-    await conn.execute(
-        BULK_INSERT_SQL,
-        nm_ids, baskets, supplier_ids, titles, descs, product_keys, scores, urls
-    )
-
-
 def _make_connector(cfg: Settings) -> aiohttp.TCPConnector:
     return aiohttp.TCPConnector(
         limit=cfg.connector_limit,
@@ -119,7 +100,7 @@ def _make_connector(cfg: Settings) -> aiohttp.TCPConnector:
 
 
 def _make_headers() -> dict:
-    # Убираем br, чтобы не зависеть от brotli-декодера
+    # Убираем br, чтобы не зависеть от brotli и не ловить 400 decode
     return {
         "User-Agent": "Mozilla/5.0",
         "Accept": "application/json",
@@ -127,13 +108,138 @@ def _make_headers() -> dict:
         "Connection": "keep-alive",
     }
 
-def _clean_text(s: Optional[str]) -> Optional[str]:
-    if s is None:
-        return None
-    # Удаляем NULL byte, который ломает Postgres UTF-8 text
-    if "\x00" in s:
-        s = s.replace("\x00", "")
-    return s
+
+class Metrics:
+    __slots__ = (
+        "t0",
+        "req",
+        "ok200",
+        "not200",
+        "timeouts",
+        "errors",
+        "json_errors",
+        "passed_filter",
+        "queued",
+        "inserted_batches",
+        "inserted_rows",
+        # статусная детализация
+        "st_400", "st_401", "st_403", "st_404", "st_429",
+        "st_500", "st_502", "st_503", "st_504", "st_other",
+    )
+
+    def __init__(self):
+        self.t0 = time.time()
+        self.req = 0
+        self.ok200 = 0
+        self.not200 = 0
+        self.timeouts = 0
+        self.errors = 0
+        self.json_errors = 0
+
+        # passed_filter = сколько прошло фильтр (или фильтр выключен)
+        self.passed_filter = 0
+        self.queued = 0
+
+        self.inserted_batches = 0
+        self.inserted_rows = 0
+
+        self.st_400 = 0
+        self.st_401 = 0
+        self.st_403 = 0
+        self.st_404 = 0
+        self.st_429 = 0
+        self.st_500 = 0
+        self.st_502 = 0
+        self.st_503 = 0
+        self.st_504 = 0
+        self.st_other = 0
+
+    def count_status(self, status: int) -> None:
+        if status == 400:
+            self.st_400 += 1
+        elif status == 401:
+            self.st_401 += 1
+        elif status == 403:
+            self.st_403 += 1
+        elif status == 404:
+            self.st_404 += 1
+        elif status == 429:
+            self.st_429 += 1
+        elif status == 500:
+            self.st_500 += 1
+        elif status == 502:
+            self.st_502 += 1
+        elif status == 503:
+            self.st_503 += 1
+        elif status == 504:
+            self.st_504 += 1
+        else:
+            self.st_other += 1
+
+    def sum_5xx(self) -> int:
+        return self.st_500 + self.st_502 + self.st_503 + self.st_504
+
+
+async def bulk_insert(conn: asyncpg.Connection, rows: List[Tuple]):
+    nm_ids: List[int] = []
+    baskets: List[int] = []
+    supplier_ids: List[Optional[int]] = []
+    titles: List[str] = []
+    descs: List[Optional[str]] = []
+    product_keys: List[Optional[str]] = []
+    scores: List[Optional[float]] = []
+    urls: List[str] = []
+
+    for (nm_id, basket, supplier_id, title, desc, product_key, score, url) in rows:
+        nm_ids.append(int(nm_id))
+        baskets.append(int(basket))
+        supplier_ids.append(int(supplier_id) if supplier_id is not None else None)
+
+        title = _clean_text(title) or ""
+        desc = _clean_text(desc)
+        product_key = _clean_text(product_key)
+
+        titles.append(title)
+        descs.append(desc)
+        product_keys.append(product_key)
+        scores.append(float(score) if score is not None else None)
+        urls.append(url)
+
+    await conn.execute(
+        BULK_INSERT_SQL,
+        nm_ids, baskets, supplier_ids, titles, descs, product_keys, scores, urls
+    )
+
+
+def _suspicious_reason(metrics: Metrics) -> str:
+    req = max(1, metrics.req)
+    ok_ratio = metrics.ok200 / req
+    to_ratio = metrics.timeouts / req
+    block_ratio = (metrics.st_403 + metrics.st_429) / req
+    not_ratio = metrics.not200 / req
+    return (
+        f"req={metrics.req} ok200={metrics.ok200} not200={metrics.not200} "
+        f"timeouts={metrics.timeouts} errors={metrics.errors} "
+        f"ok_ratio={ok_ratio:.3f} not_ratio={not_ratio:.3f} to_ratio={to_ratio:.3f} block_ratio={block_ratio:.3f} "
+        f"(404={metrics.st_404} 403={metrics.st_403} 429={metrics.st_429} 5xx={metrics.sum_5xx()} other={metrics.st_other})"
+    )
+
+
+async def _write_job_stats(pool: asyncpg.Pool, job_id: int, metrics: Metrics, suspicious: bool, susp_reason: str) -> None:
+    async with pool.acquire() as conn:
+        await conn.execute(
+            UPDATE_JOB_STATS_SQL,
+            job_id,
+            metrics.req,
+            metrics.ok200,
+            metrics.not200,
+            metrics.timeouts,
+            metrics.errors,
+            metrics.passed_filter,
+            metrics.inserted_rows,
+            suspicious,
+            (susp_reason or "")[:1000],
+        )
 
 
 async def run_job(cfg: Settings, pool: asyncpg.Pool, job: asyncpg.Record, log: logging.Logger):
@@ -144,12 +250,14 @@ async def run_job(cfg: Settings, pool: asyncpg.Pool, job: asyncpg.Record, log: l
 
     metrics = Metrics()
     sem = asyncio.Semaphore(cfg.concurrency)
-    timeout = _make_timeout(cfg)
 
     queue: asyncio.Queue = asyncio.Queue(maxsize=cfg.queue_max)
     stop_sentinel = object()
 
-    # -------- heartbeat (фикс "requeue по 30 минутам") --------
+    suspicious = False
+    suspicious_reason = ""
+
+    # ---- heartbeat ----
     hb_stop = asyncio.Event()
 
     async def heartbeat_task():
@@ -163,7 +271,7 @@ async def run_job(cfg: Settings, pool: asyncpg.Pool, job: asyncpg.Record, log: l
 
     hb = asyncio.create_task(heartbeat_task())
 
-    # -------- writer --------
+    # ---- writer ----
     async def writer_task():
         async with pool.acquire() as wconn:
             batch: List[Tuple] = []
@@ -188,49 +296,62 @@ async def run_job(cfg: Settings, pool: asyncpg.Pool, job: asyncpg.Record, log: l
                     try:
                         await bulk_insert(wconn, batch)
                     except Exception:
-                        log.exception("bulk_insert failed: job_id=%s batch_size=%s (dropping bad rows one-by-one)", job_id, len(batch))
-                        # fallback: вставляем по одной строке, чтобы отловить битую
+                        # Главное: writer не должен умереть. Пробуем по одной строке.
+                        log.exception("bulk_insert failed: job_id=%s batch_size=%s; fallback row-by-row", job_id, len(batch))
                         for row in batch:
                             try:
                                 await bulk_insert(wconn, [row])
                             except Exception:
-                                # последняя линия обороны: логируем nm_id и пропускаем
                                 log.exception("drop row nm_id=%s due to insert error", row[0])
-                        # считаем, что batch обработан
-                    finally:
-                        metrics.inserted_batches += 1
-                        metrics.inserted_rows += len(batch)  # или только успешные, как хочешь
-                        batch.clear()
-                        last_flush = now
-                    # await bulk_insert(wconn, batch)
-                    # metrics.inserted_batches += 1
-                    # metrics.inserted_rows += len(batch)
-                    # batch.clear()
-                    # last_flush = now
 
+                    metrics.inserted_batches += 1
+                    metrics.inserted_rows += len(batch)
+                    batch.clear()
+                    last_flush = now
+
+            # добить остаток
             if batch:
-                await bulk_insert(wconn, batch)
+                try:
+                    await bulk_insert(wconn, batch)
+                except Exception:
+                    log.exception("final bulk_insert failed: job_id=%s batch_size=%s; fallback row-by-row", job_id, len(batch))
+                    for row in batch:
+                        try:
+                            await bulk_insert(wconn, [row])
+                        except Exception:
+                            log.exception("drop row nm_id=%s due to insert error", row[0])
+
                 metrics.inserted_batches += 1
                 metrics.inserted_rows += len(batch)
                 batch.clear()
 
-    # -------- metrics logger --------
+    w = asyncio.create_task(writer_task())
+
+    # ---- metrics logger ----
     async def metrics_task():
         while True:
             await asyncio.sleep(cfg.metrics_every_s)
             elapsed = time.time() - metrics.t0
             rps = metrics.req / elapsed if elapsed > 0 else 0.0
             log.info(
-                "job=%s nm=[%s..%s] basket=%s | req=%s (rps=%.1f) 200=%s not200=%s timeouts=%s errors=%s json_err=%s accepted=%s queued=%s | db_batches=%s db_rows=%s | qsize=%s",
+                "job=%s nm=[%s..%s] basket=%s | req=%s (rps=%.1f) "
+                "200=%s not200=%s (404=%s 403=%s 429=%s 5xx=%s other=%s) "
+                "timeouts=%s errors=%s json_err=%s passed=%s queued=%s | "
+                "db_batches=%s db_rows=%s | qsize=%s",
                 job_id, start_nm, end_nm, basket,
                 metrics.req, rps,
-                metrics.ok200, metrics.not200, metrics.timeouts, metrics.errors, metrics.json_errors,
-                metrics.accepted, metrics.queued,
+                metrics.ok200, metrics.not200,
+                metrics.st_404, metrics.st_403, metrics.st_429,
+                metrics.sum_5xx(), metrics.st_other,
+                metrics.timeouts, metrics.errors, metrics.json_errors,
+                metrics.passed_filter, metrics.queued,
                 metrics.inserted_batches, metrics.inserted_rows,
                 queue.qsize(),
             )
 
-    # -------- circuit breaker window --------
+    m = asyncio.create_task(metrics_task())
+
+    # ---- circuit breaker window ----
     win_t0 = time.time()
     win_req = 0
     win_to = 0
@@ -244,35 +365,50 @@ async def run_job(cfg: Settings, pool: asyncpg.Pool, job: asyncpg.Record, log: l
         nonlocal win_to
         win_to += 1
 
-    async def maybe_trip_breaker():
-        """
-        Каждые ~5 секунд оцениваем, не пошёл ли шторм таймаутов.
-        Если да — выставляем storm_event и дадим внешнему коду пересоздать session.
-        """
+    async def maybe_trip_timeout_storm():
         nonlocal win_t0, win_req, win_to
         now = time.time()
         if now - win_t0 < 5.0:
             return
-
         if win_req >= 200:
             ratio = win_to / max(1, win_req)
             if ratio >= 0.80:
                 storm_event.set()
                 log.warning("timeout storm detected: %.0f%% timeouts in last 5s (req=%s)", ratio * 100, win_req)
-
         win_t0 = now
         win_req = 0
         win_to = 0
 
-    # -------- main fetch loop with possible session recreation --------
-    m = asyncio.create_task(metrics_task())
-    w = asyncio.create_task(writer_task())
+    timeout = _make_timeout(cfg)
+
+    async def should_abort_suspicious() -> Optional[str]:
+        # Вызываем после каких-то чекпоинтов (например, после каждой пачки gather)
+        if metrics.req < 5000:
+            return None
+
+        req = max(1, metrics.req)
+        ok_ratio = metrics.ok200 / req
+        to_ratio = metrics.timeouts / req
+        block_ratio = (metrics.st_403 + metrics.st_429) / req
+
+        # 1) timeout-storm: почти все таймауты и 200 почти нет
+        if metrics.ok200 == 0 and to_ratio > 0.95:
+            return "timeout-storm: no 200 responses, mostly timeouts"
+
+        # 2) http-storm: 200 очень мало и not200 доминирует
+        if ok_ratio < 0.20 and metrics.not200 > metrics.ok200:
+            return f"http-storm: ok_ratio={ok_ratio:.3f}, not200>{metrics.ok200}"
+
+        # 3) block-storm: много 403/429
+        if block_ratio > 0.30:
+            return f"block-storm: (403+429)/req={block_ratio:.3f}"
+
+        return None
+
+    current_nm = start_nm
 
     try:
-        current_nm = start_nm
-
         while current_nm <= end_nm:
-            # (пере)создаём session/connector
             connector = _make_connector(cfg)
             headers = _make_headers()
 
@@ -288,9 +424,12 @@ async def run_job(cfg: Settings, pool: asyncpg.Pool, job: asyncpg.Record, log: l
 
                         try:
                             async with session.get(url) as resp:
-                                if resp.status != 200:
+                                status = resp.status
+                                if status != 200:
                                     metrics.not200 += 1
+                                    metrics.count_status(status)
                                     return
+
                                 metrics.ok200 += 1
                                 try:
                                     data = await resp.json(content_type=None)
@@ -305,6 +444,7 @@ async def run_job(cfg: Settings, pool: asyncpg.Pool, job: asyncpg.Record, log: l
 
                         except Exception as e:
                             metrics.errors += 1
+                            # первые 20 + каждый 1000-ый
                             if metrics.errors <= 20 or metrics.errors % 1000 == 0:
                                 log.warning("http error: %r (%s)", e, type(e).__name__)
                             return
@@ -318,50 +458,59 @@ async def run_job(cfg: Settings, pool: asyncpg.Pool, job: asyncpg.Record, log: l
                         if not fr.accept:
                             return
                         product_key, score = fr.product_key, fr.score
-                        metrics.accepted += 1
+                        metrics.passed_filter += 1
                     else:
                         product_key, score = None, None
-                        metrics.accepted += 1
+                        metrics.passed_filter += 1
 
+                    # очередь — backpressure
                     row = (nm_id, basket, supplier_id, title, desc, product_key, score, url)
                     await queue.put(row)
                     metrics.queued += 1
 
                 tasks: List[asyncio.Task] = []
-                # бежим по nm пока не поймали storm
+
                 while current_nm <= end_nm and not storm_event.is_set():
                     tasks.append(asyncio.create_task(handle_nm(current_nm)))
                     current_nm += 1
 
-                    # раз в пачку ждём завершения и проверяем breaker
                     if len(tasks) >= cfg.concurrency * 4:
                         await asyncio.gather(*tasks)
                         tasks.clear()
 
-                        await maybe_trip_breaker()
+                        await maybe_trip_timeout_storm()
 
-                        # ранний abort: если мы реально в яме (почти всё timeout и 200=0)
-                        if metrics.req >= 5000 and metrics.ok200 == 0 and (metrics.timeouts / metrics.req) > 0.95:
-                            raise RuntimeError("timeout-storm: abort job early (no 200 responses)")
+                        abort_reason = await should_abort_suspicious()
+                        if abort_reason:
+                            raise RuntimeError(abort_reason)
 
                 if tasks:
                     await asyncio.gather(*tasks)
                     tasks.clear()
-                    await maybe_trip_breaker()
 
-                # если поймали шторм — делаем паузу и пересоздаём session (внешний while продолжит)
+                    await maybe_trip_timeout_storm()
+                    abort_reason = await should_abort_suspicious()
+                    if abort_reason:
+                        raise RuntimeError(abort_reason)
+
+                # если таймаут-шторм — пауза + пересоздать session/connector
                 if storm_event.is_set():
-                    log.warning("sleep 2s + recreate session/connector due to storm")
+                    suspicious = True
+                    suspicious_reason = "timeout-storm-window: 80%+ timeouts in 5s"
+                    log.warning("sleep 2s + recreate session/connector due to timeout storm")
                     await asyncio.sleep(2.0)
                     continue
 
-            # session закрылась нормально — выходим из while и завершаем job
+            # session отработала нормально → выходим
             break
 
-        # дожимаем очередь и writer
+        # корректное завершение: дожимаем очередь
         await queue.put(stop_sentinel)
         await queue.join()
         await w
+
+        # финальная запись stats
+        await _write_job_stats(pool, job_id, metrics, suspicious, suspicious_reason)
 
         m.cancel()
         try:
@@ -371,12 +520,35 @@ async def run_job(cfg: Settings, pool: asyncpg.Pool, job: asyncpg.Record, log: l
 
         return job_id
 
+    except Exception as e:
+        # Любая ошибка job: помечаем suspicious, пишем stats и пробрасываем дальше
+        suspicious = True
+        suspicious_reason = f"{type(e).__name__}: {e} | {_suspicious_reason(metrics)}"
+        await _write_job_stats(pool, job_id, metrics, suspicious, suspicious_reason)
+        raise
+
     finally:
+        # Остановить heartbeat
         hb_stop.set()
         hb.cancel()
         try:
             await hb
         except asyncio.CancelledError:
+            pass
+
+        # На всякий случай: если writer ещё жив — попросим его завершиться
+        # (если исключение случилось раньше)
+        try:
+            if not w.done():
+                await queue.put(stop_sentinel)
+        except Exception:
+            pass
+
+        # метрик-таск
+        try:
+            if not m.done():
+                m.cancel()
+        except Exception:
             pass
 
 
@@ -412,14 +584,17 @@ async def main_loop():
                 async with pool.acquire() as conn:
                     await mark_done(conn, job_id)
             except Exception as e:
-                job_id = int(job["job_id"])
                 reason = f"{type(e).__name__}: {e}"
                 trace = traceback.format_exc()
-
                 log.exception("job failed: job_id=%s", job_id)
 
+                # mark_failed мог быть как старый (job_id), так и новый (job_id, reason, trace)
                 async with pool.acquire() as conn:
-                    await mark_failed(conn, job_id, reason, trace)
+                    try:
+                        await mark_failed(conn, job_id, reason, trace)
+                    except TypeError:
+                        # fallback на старую сигнатуру
+                        await mark_failed(conn, job_id)
 
 
 if __name__ == "__main__":
