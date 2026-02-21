@@ -8,3 +8,4 @@ __pycache__
 *.yml
 userlist.txt
 config.py
+prod_app/worker/config.py

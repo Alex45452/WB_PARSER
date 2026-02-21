@@ -97,8 +97,8 @@ async def bulk_insert(conn: asyncpg.Connection, rows: List[Tuple]):
         nm_ids.append(int(nm_id))
         baskets.append(int(basket))
         supplier_ids.append(int(supplier_id) if supplier_id is not None else None)
-        titles.append(title if title is not None else "")
-        descs.append(desc if desc is not None else None)
+        titles.append(_clean_text(title) if title is not None else "")
+        descs.append(_clean_text(desc) if desc is not None else None)
         product_keys.append(product_key if product_key is not None else None)
         scores.append(float(score) if score is not None else None)
         urls.append(url)
@@ -126,6 +126,14 @@ def _make_headers() -> dict:
         "Accept-Encoding": "gzip, deflate",
         "Connection": "keep-alive",
     }
+
+def _clean_text(s: Optional[str]) -> Optional[str]:
+    if s is None:
+        return None
+    # Удаляем NULL byte, который ломает Postgres UTF-8 text
+    if "\x00" in s:
+        s = s.replace("\x00", "")
+    return s
 
 
 async def run_job(cfg: Settings, pool: asyncpg.Pool, job: asyncpg.Record, log: logging.Logger):
@@ -177,11 +185,28 @@ async def run_job(cfg: Settings, pool: asyncpg.Pool, job: asyncpg.Record, log: l
 
                 now = time.time()
                 if batch and (len(batch) >= cfg.insert_batch or (now - last_flush) >= 1.0):
-                    await bulk_insert(wconn, batch)
-                    metrics.inserted_batches += 1
-                    metrics.inserted_rows += len(batch)
-                    batch.clear()
-                    last_flush = now
+                    try:
+                        await bulk_insert(wconn, batch)
+                    except Exception:
+                        log.exception("bulk_insert failed: job_id=%s batch_size=%s (dropping bad rows one-by-one)", job_id, len(batch))
+                        # fallback: вставляем по одной строке, чтобы отловить битую
+                        for row in batch:
+                            try:
+                                await bulk_insert(wconn, [row])
+                            except Exception:
+                                # последняя линия обороны: логируем nm_id и пропускаем
+                                log.exception("drop row nm_id=%s due to insert error", row[0])
+                        # считаем, что batch обработан
+                    finally:
+                        metrics.inserted_batches += 1
+                        metrics.inserted_rows += len(batch)  # или только успешные, как хочешь
+                        batch.clear()
+                        last_flush = now
+                    # await bulk_insert(wconn, batch)
+                    # metrics.inserted_batches += 1
+                    # metrics.inserted_rows += len(batch)
+                    # batch.clear()
+                    # last_flush = now
 
             if batch:
                 await bulk_insert(wconn, batch)
