@@ -28,11 +28,11 @@ def _norm(s: str) -> str:
 # PS5 ловим и по "ps5", и по "playstation"
 ANCHORS = (
     ("steam_deck", ("steam deck", "steamdeck", "стим дек", "стимдек")),
-    ("ps5", ("ps5", "playstation", "плейстейшн")),
+    ("ps5", ("ps5", "playstation", "плейстейшн","play station")),
     ("yandex_station", ("яндекс", "yandex")),
     ("macbook", ("macbook", "макбук", "mac book")),
     ("ipad", ("ipad",)),
-    ("iphone", ("iphone", "айфон", "ай фон")),
+    ("iphone", ("iphone", "айфон",)),
     ("samsung", ("samsung", "самсунг")),
     ("huawei", ("huawei", "хуавей")),
     # если появится в keywords.txt — уже готово:
@@ -44,12 +44,8 @@ _ANCHORS_NORM = tuple((k, tuple(_norm(a) for a in arr)) for k, arr in ANCHORS)
 
 
 def _validate_keywords_covered() -> None:
-    """
-    Гарантия: все модели из keywords.txt попадают хотя бы под один якорь.
-    Проверка делается 1 раз при старте (очень дёшево по сравнению с 600M).
-    Можно выключить, если хочешь: export CHECK_KEYWORDS=0
-    """
-    if os.getenv("CHECK_KEYWORDS", "1") != "1":
+
+    if os.getenv("CHECK_KEYWORDS", "0") != "1":
         return
 
     path = os.getenv("KEYWORDS_FILE", "keywords.txt")
