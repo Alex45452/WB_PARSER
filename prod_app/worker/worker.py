@@ -74,11 +74,12 @@ def _clean_text(s: Optional[str]) -> Optional[str]:
 
 
 def extract_fields(obj: dict) -> tuple[Optional[int], Optional[str], Optional[str]]:
-    supplier_id = obj.get("supplierId") or obj.get("supplier_id") or obj.get("selling", {}).get("supplierId")
-    title = obj.get("imt_name") or obj.get("title") or obj.get("name") or obj.get("goodsName")
-    desc = obj.get("description") or obj.get("desc") or obj.get("content", {}).get("description")
-    return supplier_id, title, desc
-
+    if obj:
+        supplier_id = obj.get("supplierId") or obj.get("supplier_id") or obj.get("selling", {}).get("supplierId")
+        title = obj.get("imt_name") or obj.get("title") or obj.get("name") or obj.get("goodsName")
+        desc = obj.get("description") or obj.get("desc") or obj.get("content", {}).get("description")
+        return supplier_id, title, desc
+    return None, None, None
 
 def _make_timeout(cfg: Settings) -> aiohttp.ClientTimeout:
     total = None if cfg.http_total_timeout_s == 0 else cfg.http_total_timeout_s
