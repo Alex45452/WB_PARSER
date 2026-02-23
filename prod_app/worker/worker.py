@@ -397,8 +397,9 @@ async def run_job(cfg: Settings, pool: asyncpg.Pool, job: asyncpg.Record, log: l
             return "timeout-storm: no 200 responses, mostly timeouts"
 
         # 2) http-storm: 200 очень мало и not200 доминирует
-        if ok_ratio < 0.20 and metrics.not200 > metrics.ok200 and req > 200000:
-            return f"http-storm: ok_ratio={ok_ratio:.3f}, not200>{metrics.ok200}"
+        # if ok_ratio < 0.20 and metrics.not200 > metrics.ok200 and req > 200000:
+        #     return f"http-storm: ok_ratio={ok_ratio:.3f}, not200>{metrics.ok200}"
+        # Отключена на последние 7 работ во избежанние потери необх ссылок
 
         # 3) block-storm: много 403/429
         if block_ratio > 0.30:
