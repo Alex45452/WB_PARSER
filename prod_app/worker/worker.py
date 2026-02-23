@@ -396,7 +396,7 @@ async def run_job(cfg: Settings, pool: asyncpg.Pool, job: asyncpg.Record, log: l
             return "timeout-storm: no 200 responses, mostly timeouts"
 
         # 2) http-storm: 200 очень мало и not200 доминирует
-        if ok_ratio < 0.20 and metrics.not200 > metrics.ok200:
+        if ok_ratio < 0.20 and metrics.not200 > metrics.ok200 and req > 50000:
             return f"http-storm: ok_ratio={ok_ratio:.3f}, not200>{metrics.ok200}"
 
         # 3) block-storm: много 403/429
@@ -564,7 +564,7 @@ async def main_loop():
     cfg = Settings()
 
     from .db import create_pool
-    from .jobs import claim_jobs, mark_done, mark_failed
+    from .jobs import claim_jobs, mark_done, mark_failed, requeue_job
 
     pool = await create_pool(cfg)
 
@@ -592,9 +592,12 @@ async def main_loop():
                 async with pool.acquire() as conn:
                     try:
                         await mark_failed(conn, job_id, reason, trace)
+                        await requeue_job(conn, job_id)
                     except TypeError:
                         # fallback на старую сигнатуру
                         await mark_failed(conn, job_id)
+                        await requeue_job(conn, job_id)
+
 
 
 if __name__ == "__main__":
