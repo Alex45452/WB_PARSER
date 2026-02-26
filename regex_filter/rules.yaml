@@ -1,0 +1,440 @@
+version: 2
+
+engine:
+  flags: [re.IGNORECASE, re.UNICODE]
+
+text_priority:
+  - title
+  - description
+
+# ---------- GLOBAL FILTERS ----------
+# If any of these match in TITLE -> reject immediately (category=noise)
+global_hard_reject_title:
+  # accessories / consumables / services
+  - '\b(чехол|кейс|бампер|накладк|пленк|стекл(о|а)|защитн(ое|ая)|бронестекло|кабель|провод|зарядк(а|у)|блок\s*питан(ия|ья)|адаптер|переходник|хаб|hub|dock|док-?станц(ия|ии)|держател|подставк|кронштейн|ремеш(ок|к)|стилус|пенсил|клавиатур|мыш(ь|ка)|сумк|рюкзак|наклейк|брелок|упаковк|коробк)\b'
+  - '\b(запчаст|шлейф|диспле(й|я)|экран|тачскрин|аккумулятор|батере(я|и)|корпус|крышк|разъем|камера|динамик|плата|ремонт|замена)\b'
+  - '\b(услуг|страховк|гаранти(я|и)\b(?!\s*от\s*производителя)|сертификат|подписк|dlc|код\s*(активац|пополнен))\b'
+
+  # not new / risky
+  - '\b(б\/у|бу\b|used|витрин(а|ный)|уцен(к|ка)|восстанов(лен|)|ref\b|реф\b|renew|распак(ован|)|вскрыт(ая|ый|о)|активир(ован|)|обмен(ный|)|после\s*ремонта)\b'
+
+# If match only in DESCRIPTION -> do not auto-accept (mark unknown in decision logic)
+global_hard_reject_description:
+  - '\b(б\/у|бу\b|used|витрин|уцен|восстанов|ref\b|реф\b|распак|вскрыт|активир|обмен|после\s*ремонта)\b'
+
+# ---------- CATEGORY ORDER ----------
+category_priority:
+  - iphone
+  - macbook
+  - ipad
+  - samsung
+  - huawei
+  - ps5
+  - steam_deck
+  - yandex_station
+  - nintendo_switch
+
+# ---------- DISAMBIGUATION ----------
+# After category match, try to match a target inside the category.
+# If target matched AND any conflict patterns matched -> unknown (or reject if you change mode).
+disambiguation:
+  mode: unknown_on_conflict      # unknown_on_conflict | reject_on_conflict
+  fields: [title, description]
+  priority_field: title
+
+# ---------- CATEGORIES ----------
+categories:
+
+  iphone:
+    positive_title:
+      - '\biphone\s*(?:17|air)\b'
+      - '\biphone\s*17\s*pro\b'
+      - '\biphone\s*17\s*pro\s*max\b'
+    positive_description:
+      - '\biphone\s*(?:17|air)\b'
+      - '\biphone\s*17\s*pro\b'
+      - '\biphone\s*17\s*pro\s*max\b'
+
+    negative_title:
+      - '\b(чехол|кейс|стекл(о|а)|пленк|бампер|кабель|зарядк|адаптер|переходник|держател|подставк|запчаст|шлейф|диспле(й|я)|аккумулятор|корпус|линз(а|ы)|объектив)\b'
+
+    hints:
+      storage:
+        - '\b(256|512)\s*(gb|гб)\b'
+        - '\b1\s*tb\b'
+        - '\b2\s*tb\b'
+      sim:
+        - '\b(e\s*sim|esim)\b'
+        - '\bsim\s*\+\s*e\s*sim\b'
+
+    targets:
+      iphone_17_pro_max:
+        match_any:
+          - '\biphone\s*17\s*pro\s*max\b'
+        conflict_if_any:
+          - '\biphone\s*17\s*pro\b(?!\s*max)'
+          - '\biphone\s*17\b(?!\s*pro)'
+          - '\biphone\s*air\b'
+
+      iphone_17_pro:
+        match_any:
+          - '\biphone\s*17\s*pro\b(?!\s*max)'
+        conflict_if_any:
+          - '\biphone\s*17\s*pro\s*max\b'
+          - '\biphone\s*air\b'
+          - '\biphone\s*17\b(?!\s*pro)'
+
+      iphone_17:
+        match_any:
+          - '\biphone\s*17\b(?!\s*pro)'
+        conflict_if_any:
+          - '\biphone\s*17\s*pro\b'
+          - '\biphone\s*17\s*pro\s*max\b'
+          - '\biphone\s*air\b'
+
+      iphone_air:
+        match_any:
+          - '\biphone\s*air\b'
+        conflict_if_any:
+          - '\biphone\s*17\b'
+          - '\biphone\s*17\s*pro\b'
+          - '\biphone\s*17\s*pro\s*max\b'
+
+
+  macbook:
+    positive_title:
+      - '\bmac\s*book\s*(air|pro)\b'
+      - '\bmacbook\s*(air|pro)\b'
+    positive_description:
+      - '\bmac\s*book\s*(air|pro)\b'
+      - '\bmacbook\s*(air|pro)\b'
+
+    # NOTE: do not hard-ban вилк/переходник: can appear in legit laptop listings
+    negative_title:
+      - '\b(чехол|кейс|накладк|пленк|стекл(о|а)|подставк|держател|сумк|рюкзак|клавиатур(а|ы)\b(?!.*macbook)|мыш(ь|ка)\b(?!.*macbook)|хаб|hub|dock|док-?станц|ssd|наклейк|запчаст|шлейф|диспле(й|я)|аккумулятор)\b'
+
+    hints:
+      size:
+        - '\b(13|14|15)\b'
+      chip:
+        - '\bm1\b|\bm2\b|\bm4\b|\bm5\b|\bm4\s*pro\b'
+      config:
+        - '\b(8|16|24)\s*\/\s*(256|512)\b'
+        - '\b(256|512)\s*(gb|гб)\b'
+        - '\b1\s*tb\b'
+
+    targets:
+      macbook_air:
+        match_any:
+          - '\bmac\s*book\s*air\b'
+          - '\bmacbook\s*air\b'
+        conflict_if_any:
+          - '\bmac\s*book\s*pro\b'
+          - '\bmacbook\s*pro\b'
+
+      macbook_pro:
+        match_any:
+          - '\bmac\s*book\s*pro\b'
+          - '\bmacbook\s*pro\b'
+        conflict_if_any:
+          - '\bmac\s*book\s*air\b'
+          - '\bmacbook\s*air\b'
+
+    conflict_groups:
+      - name: macbook_chip_generation
+        any_of:
+          - '\bm1\b'
+          - '\bm2\b'
+          - '\bm4\b'
+          - '\bm5\b'
+          - '\bm4\s*pro\b'
+        rule: unknown_if_multiple_distinct_matches
+
+
+  ipad:
+    positive_title:
+      - '\bipad\s*11\b'
+      - '\bipad\s*air\b'
+    positive_description:
+      - '\bipad\s*11\b'
+      - '\bipad\s*air\b'
+
+    negative_title:
+      - '\b(чехол|кейс|стекл(о|а)|пленк|стилус|пенсил|keyboard|клавиатур|держател|подставк|кабель|зарядк|адаптер|переходник|запчаст|диспле(й|я)|аккумулятор)\b'
+
+    hints:
+      size:
+        - '\b11\b'
+        - '\b13\b'
+      chip:
+        - '\bm3\b'
+      year:
+        - '\b2025\b'
+      cellular:
+        - '\bwi-?\s*fi\b'
+        - '\blte\b'
+      storage:
+        - '\b(128|256)\s*(gb|гб)?\b'
+
+    targets:
+      ipad_11:
+        match_any:
+          - '\bipad\s*11\b'
+        conflict_if_any:
+          - '\bipad\s*air\b'
+
+      ipad_air:
+        match_any:
+          - '\bipad\s*air\b'
+        conflict_if_any:
+          - '\bipad\s*11\b'
+
+
+  samsung:
+    positive_title:
+      - '\b(samsung|самсунг)\b.*\b(z\s*fold\s*7|s\s*25\s*ultra|s\s*25\s*fe|s\s*25\+?|s\s*25\s*plus|a\s*56)\b'
+    positive_description:
+      - '\b(samsung|самсунг)\b.*\b(z\s*fold\s*7|s\s*25\s*ultra|s\s*25\s*fe|s\s*25\+?|s\s*25\s*plus|a\s*56)\b'
+
+    negative_title:
+      - '\b(чехол|кейс|стекл(о|а)|пленк|бампер|кабель|зарядк|адаптер|переходник|держател|подставк|запчаст|шлейф|диспле(й|я)|аккумулятор)\b'
+
+    hints:
+      config:
+        - '\b(8|12)\s*\/\s*(128|256|512)\b'
+        - '\b1\s*tb\b'
+        - '\b(256|512)\b'
+
+    targets:
+      z_fold7:
+        match_any:
+          - '\bz\s*fold\s*7\b'
+        conflict_if_any:
+          - '\bs\s*25\b'
+          - '\ba\s*56\b'
+
+      s25_ultra:
+        match_any:
+          - '\bs\s*25\s*ultra\b'
+        conflict_if_any:
+          - '\bs\s*25\s*fe\b'
+          - '\bs\s*25\+\b'
+          - '\bs\s*25\s*plus\b'
+          - '\bs\s*25\b(?!\s*(ultra|fe|\+|plus))'
+          - '\bz\s*fold\s*7\b'
+          - '\ba\s*56\b'
+
+      s25_fe:
+        match_any:
+          - '\bs\s*25\s*fe\b'
+        conflict_if_any:
+          - '\bs\s*25\s*ultra\b'
+          - '\bs\s*25\+\b'
+          - '\bs\s*25\s*plus\b'
+          - '\bs\s*25\b(?!\s*(ultra|fe|\+|plus))'
+          - '\bz\s*fold\s*7\b'
+          - '\ba\s*56\b'
+
+      s25_plus:
+        match_any:
+          - '\bs\s*25\+\b'
+          - '\bs\s*25\s*plus\b'
+        conflict_if_any:
+          - '\bs\s*25\s*ultra\b'
+          - '\bs\s*25\s*fe\b'
+          - '\bs\s*25\b(?!\s*(ultra|fe|\+|plus))'
+          - '\bz\s*fold\s*7\b'
+          - '\ba\s*56\b'
+
+      s25:
+        match_any:
+          - '\bs\s*25\b(?!\s*(ultra|fe|\+|plus))'
+        conflict_if_any:
+          - '\bs\s*25\s*ultra\b'
+          - '\bs\s*25\s*fe\b'
+          - '\bs\s*25\+\b'
+          - '\bs\s*25\s*plus\b'
+          - '\bz\s*fold\s*7\b'
+          - '\ba\s*56\b'
+
+      a56:
+        match_any:
+          - '\ba\s*56\b'
+        conflict_if_any:
+          - '\bs\s*25\b'
+          - '\bz\s*fold\s*7\b'
+
+
+  huawei:
+    positive_title:
+      - '\b(huawei|хуавей)\b.*\bpura\s*80\b'
+      - '\bpura\s*80\s*pro\b'
+    positive_description:
+      - '\b(huawei|хуавей)\b.*\bpura\s*80\b'
+      - '\bpura\s*80\s*pro\b'
+
+    negative_title:
+      - '\b(чехол|кейс|стекл(о|а)|пленк|бампер|кабель|зарядк|адаптер|переходник|держател|подставк|запчаст|шлейф|диспле(й|я)|аккумулятор)\b'
+
+    hints:
+      config:
+        - '\b12\s*\/\s*(256|512)\b'
+
+    targets:
+      pura_80_pro:
+        match_any:
+          - '\bpura\s*80\s*pro\b'
+        conflict_if_any:
+          - '\bpura\s*80\b(?!\s*pro)'
+
+      pura_80:
+        match_any:
+          - '\bpura\s*80\b(?!\s*pro)'
+        conflict_if_any:
+          - '\bpura\s*80\s*pro\b'
+
+
+  ps5:
+    positive_title:
+      - '\b(ps\s*5|playstation\s*5)\b.*\bslim\b.*\b(disk|disc|диск)\b'
+      - '\b(ps\s*5|playstation\s*5)\b.*\bslim\b.*\b(digital|цифров)\b'
+      - '\b(ps\s*5|playstation\s*5)\b.*\bpro\b'
+    positive_description:
+      - '\b(ps\s*5|playstation\s*5)\b.*\bslim\b'
+      - '\b(ps\s*5|playstation\s*5)\b.*\bpro\b'
+
+    negative_title:
+      - '\b(геймпад|джойстик|контроллер|dual\s*sense|dualsense|руль|зарядн(ая|ый)\s*станц|док|dock|кабель|адаптер|переходник|подписк|ps\s*plus|игра|диск\s*игровой)\b'
+
+    targets:
+      ps5_pro:
+        match_any:
+          - '\b(ps\s*5|playstation\s*5)\b.*\bpro\b'
+        conflict_if_any:
+          - '\bslim\b'
+
+      ps5_slim_digital:
+        match_any:
+          - '\b(ps\s*5|playstation\s*5)\b.*\bslim\b.*\b(digital|цифров)\b'
+        conflict_if_any:
+          - '\b(ps\s*5|playstation\s*5)\b.*\bpro\b'
+          - '\b(disk|disc|диск)\b'
+
+      ps5_slim_disk:
+        match_any:
+          - '\b(ps\s*5|playstation\s*5)\b.*\bslim\b.*\b(disk|disc|диск)\b'
+        conflict_if_any:
+          - '\b(ps\s*5|playstation\s*5)\b.*\bpro\b'
+          - '\b(digital|цифров)\b'
+
+
+  steam_deck:
+    positive_title:
+      - '\bsteam\s*deck\b'
+    positive_description:
+      - '\bsteam\s*deck\b'
+
+    negative_title:
+      - '\b(док|dock|станц(ия|ии)|хаб|hub|чехол|кейс|стекл(о|а)|пленк|кабель|зарядк|адаптер|переходник|запчаст|шлейф|диспле(й|я)|аккумулятор|стик(и)?|аналогов(ый|ые)\s*стик)\b'
+
+    hints:
+      oled:
+        - '\boled\b'
+      storage:
+        - '\b512\s*(gb|гб)?\b'
+
+
+  yandex_station:
+    positive_title:
+      - '\b(яндекс|yandex)\b.*\b(станц(ия|ии)|station)\b'
+      - '\b(алис(а|ой)|alice)\b'
+      - '\b(макс|max|дуо\s*макс|duo\s*max|миди|midi|мини\s*3|mini\s*3|лайт|lite|light|стрит|street)\b'
+    positive_description:
+      - '\b(яндекс|yandex)\b.*\b(станц(ия|ии)|station)\b'
+      - '\b(алис(а|ой)|alice)\b'
+
+    negative_title:
+      - '\b(будильник|колокольчик|радио\b|mp3|проигрывател|светильник|ночник|увлажнител|игрушк|караоке|микрофон)\b'
+
+    decision_rules:
+      require_any_of:
+        - '(\b(яндекс|yandex)\b.*\b(станц(ия|ии)|station)\b|\b(алис(а|ой)|alice)\b)'
+      and_any_of:
+        - '\b(макс|max|дуо\s*макс|duo\s*max|миди|midi|мини\s*3|mini\s*3|лайт\s*2|lite\s*2|light\s*2|лайт|lite|light|стрит|street)\b'
+
+    targets:
+      duo_max:
+        match_any:
+          - '\b(дуо\s*макс|duo\s*max)\b'
+        conflict_if_any:
+          - '\b(миди|midi|мини|mini|лайт|lite|light|стрит|street)\b'
+
+      max:
+        match_any:
+          - '\b(макс|max)\b'
+        conflict_if_any:
+          - '\b(дуо\s*макс|duo\s*max)\b'
+          - '\b(миди|midi|мини|mini|лайт|lite|light|стрит|street)\b'
+
+      midi:
+        match_any:
+          - '\b(миди|midi)\b'
+        conflict_if_any:
+          - '\b(макс|max|дуо\s*макс|duo\s*max|мини|mini|лайт|lite|light|стрит|street)\b'
+
+      mini_3:
+        match_any:
+          - '\b(мини\s*3|mini\s*3)\b'
+        conflict_if_any:
+          - '\b(макс|max|дуо\s*макс|duo\s*max|миди|midi|лайт|lite|light|стрит|street)\b'
+
+      light_2:
+        match_any:
+          - '\b(лайт\s*2|lite\s*2|light\s*2)\b'
+        conflict_if_any:
+          - '\b(макс|max|дуо\s*макс|duo\s*max|миди|midi|мини|mini|стрит|street)\b'
+
+      light:
+        match_any:
+          - '\b(лайт|lite|light)\b'
+        conflict_if_any:
+          - '\b(лайт\s*2|lite\s*2|light\s*2)\b'
+          - '\b(макс|max|дуо\s*макс|duo\s*max|миди|midi|мини|mini|стрит|street)\b'
+
+      street:
+        match_any:
+          - '\b(стрит|street)\b'
+        conflict_if_any:
+          - '\b(макс|max|дуо\s*макс|duo\s*max|миди|midi|мини|mini|лайт|lite|light)\b'
+
+
+  nintendo_switch:
+    positive_title:
+      - '\bnintendo\s*switch\b'
+      - '\b(нинтендо|nintendo)\b.*\bswitch\b'
+    positive_description:
+      - '\bnintendo\s*switch\b'
+
+    negative_title:
+      - '\b(игра|game|картридж|dlc|код\s*(активац|пополнен)|подписк|online|чехол|кейс|стекл(о|а)|пленк|док|dock|зарядк|кабель|адаптер|переходник|геймпад|контроллер)\b'
+
+
+# ---------- DECISION LOGIC (as comments for implementation) ----------
+decision_logic:
+  # 1) if any global_hard_reject_title matches title => reject, category=noise
+  # 2) for category in category_priority:
+  #      if any positive_title matches title:
+  #         if any category.negative_title matches title => reject (category-specific)
+  #         else if category has decision_rules:
+  #              require_any_of and and_any_of must pass on title; else unknown
+  #         else accept(category)
+  #         then attempt target disambiguation (if targets exist):
+  #              find first target with match_any in priority_field (title), else other fields
+  #              if target matched and any conflict_if_any matched in priority_field => unknown/reject per disambiguation.mode
+  #              if conflict_groups present and rule triggers => unknown
+  # 3) if no category matched in title:
+  #      repeat using positive_description over description
+  #      if global_soft_risk_description matched => unknown (do not auto-accept)
+  # 4) else unknown
+  use_soft_risk_for_description: true
+  description_match_returns: unknown_if_risky_else_accept
