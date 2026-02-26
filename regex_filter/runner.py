@@ -30,9 +30,9 @@ def fetch_batch(conn, last_nm_id: int, batch_size: int) -> List[Tuple[int, str, 
 
     if not REPROCESS_ALL:
         if ONLY_UNPROCESSED:
-            where.append("parse_status = 0")
+            where.append("(parse_status IS NULL OR parse_status = 0)")
         else:
-            where.append("parse_status = 0")
+            where.append("(parse_status IS NULL OR parse_status = 0)")
 
     where.append("nm_id > %s")
     params.append(last_nm_id)
