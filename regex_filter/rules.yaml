@@ -60,7 +60,7 @@ categories:
 
     hints:
       storage:
-        - '\b(256|512)\s*(gb|гб)\b'
+        - '\b(256|512|1024|2048)\s*(gb|гб)\b'
         - '\b1\s*tb\b'
         - '\b2\s*tb\b'
       sim:
@@ -115,11 +115,11 @@ categories:
 
     hints:
       size:
-        - '\b(13|14|15)\b'
+        - '\b(13|15)\b'
       chip:
-        - '\bm1\b|\bm2\b|\bm4\b|\bm5\b|\bm4\s*pro\b'
+        - '\bm1\b|\bm2\b|\bm3\b|\bm4\b|\bm5\b|\bm4\s*pro\b'
       config:
-        - '\b(8|16|24)\s*\/\s*(256|512)\b'
+        - '\b(8|16)\s*\/\s*(256|512)\b'
         - '\b(256|512)\s*(gb|гб)\b'
         - '\b1\s*tb\b'
 
@@ -145,6 +145,7 @@ categories:
         any_of:
           - '\bm1\b'
           - '\bm2\b'
+          - '\bm3\b'
           - '\bm4\b'
           - '\bm5\b'
           - '\bm4\s*pro\b'
@@ -304,7 +305,7 @@ categories:
       - '\b(ps\s*5|playstation\s*5)\b.*\bpro\b'
 
     negative_title:
-      - '\b(геймпад|джойстик|контроллер|dual\s*sense|dualsense|руль|зарядн(ая|ый)\s*станц|док|dock|кабель|адаптер|переходник|подписк|ps\s*plus|игра|диск\s*игровой)\b'
+      - '\b(геймпад|джойстик|контроллер|dual\s*sense|dualsense|руль|зарядн(ая|ый)\s*станц|док|dock|кабель|адаптер|переходник|подписк|ps\s*plus|ps\s*4|игра|диск\s*игровой)\b'
 
     targets:
       ps5_pro:
@@ -342,6 +343,8 @@ categories:
         - '\boled\b'
       storage:
         - '\b512\s*(gb|гб)?\b'
+        - '\b1\s*tb\b'
+        
 
 
   yandex_station:
@@ -365,7 +368,7 @@ categories:
     targets:
       duo_max:
         match_any:
-          - '\b(дуо\s*макс|duo\s*max)\b'
+          - '\b(дуо\s*макс|duo\s*max|дуо)\b'
         conflict_if_any:
           - '\b(миди|midi|мини|mini|лайт|lite|light|стрит|street)\b'
 
@@ -390,15 +393,15 @@ categories:
 
       light_2:
         match_any:
-          - '\b(лайт\s*2|lite\s*2|light\s*2)\b'
+          - '\b(лайт\s*2|lite\s*2)\b'
         conflict_if_any:
           - '\b(макс|max|дуо\s*макс|duo\s*max|миди|midi|мини|mini|стрит|street)\b'
 
       light:
         match_any:
-          - '\b(лайт|lite|light)\b'
+          - '\b(лайт|lite)\b'
         conflict_if_any:
-          - '\b(лайт\s*2|lite\s*2|light\s*2)\b'
+          - '\b(лайт\s*2|lite\s*2)\b'
           - '\b(макс|max|дуо\s*макс|duo\s*max|миди|midi|мини|mini|стрит|street)\b'
 
       street:
