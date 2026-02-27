@@ -7,6 +7,15 @@ iPhone 17 Pro 1TB Sim+eSim
 iPhone 17 Pro 512 Sim+eSim
 iPhone 17 512 Sim+eSim
 iPhone 17 256 Sim+eSim
+iPhone 17 Pro Max 2TB eSim+eSim
+iPhone 17 Pro Max 1TB eSim+eSim
+iPhone 17 Pro Max 512 eSim+eSim
+iPhone 17 Pro Max 256 eSim+eSim
+iPhone 17 Pro 256 eSim+eSim
+iPhone 17 Pro 1TB eSim+eSim
+iPhone 17 Pro 512 eSim+eSim
+iPhone 17 512 eSim+eSim
+iPhone 17 256 eSim+eSim
 iPhone Air 1 TB
 iPhone Air 512
 iPhone Air 256
@@ -17,13 +26,20 @@ iPad 11 128 Wi-Fi
 iPad 11 256 Wi-Fi
 iPad 11 128 LTE
 iPad 11 256 LTE
-iPad Air 11 M3 128 
-iPad Air 11 M3 256 
-iPad Air 13 M3 128 
-iPad Air 13 M3 256
-iPad Air 11 2025 128
-iPad Air 11 2025 256
+iPad Air 11 M3 128 Wi-FI  
+iPad Air 11 M3 256 Wi-FI
+iPad Air 13 M3 128 Wi-FI
+iPad Air 13 M3 256 Wi-FI
+iPad Air 11 M3 128 LTE 
+iPad Air 11 M3 256 LTE
+iPad Air 13 M3 128 LTE
+iPad Air 13 M3 256 LTE
+iPad Air 11 2025 128 LTE
+iPad Air 11 2025 256 LTE
+iPad Air 11 2025 128 Wi-FI
+iPad Air 11 2025 256 Wi-FI
 Steam Deck Oled 512
+Steam Deck Oled 1tb
 PS5 Slim Disk
 playstation 5 slim disk
 PS5 Slim Digital
@@ -53,9 +69,9 @@ Huawei Pura 80 12/256
 Яндекс Lite 2 с часами
 Яндекс лайт 2 с часами
 Яндекс стрит
-MacBook Air 13 M1 256 Space Gray
-MacBook Air 13 M1 256 Gold
-MacBook Air 13 M1 256 Silver
+MacBook Air 13 M1 8/256 Space Gray
+MacBook Air 13 M1 8/256 Gold
+MacBook Air 13 M1 8/256 Silver
 MacBook Air 13 M2 16/256
 MacBook Air 13 M2 8/512
 MacBook Air 13 M4 16/256
