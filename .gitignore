@@ -7,5 +7,5 @@ __pycache__
 *.xlsx
 *.yml
 userlist.txt
-config.py
-prod_app/worker/config.py
+*config.py
+
