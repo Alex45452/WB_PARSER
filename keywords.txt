@@ -22,22 +22,18 @@ iPhone Air 256
 Samsung Z Fold7 256
 Samsung Z Fold7 512
 Samsung Z Fold7 1 TB
-iPad 11 128 Wi-Fi
-iPad 11 256 Wi-Fi
-iPad 11 128 LTE
-iPad 11 256 LTE
-iPad Air 11 M3 128 Wi-FI  
-iPad Air 11 M3 256 Wi-FI
-iPad Air 13 M3 128 Wi-FI
-iPad Air 13 M3 256 Wi-FI
-iPad Air 11 M3 128 LTE 
-iPad Air 11 M3 256 LTE
-iPad Air 13 M3 128 LTE
-iPad Air 13 M3 256 LTE
-iPad Air 11 2025 128 LTE
-iPad Air 11 2025 256 LTE
-iPad Air 11 2025 128 Wi-FI
-iPad Air 11 2025 256 Wi-FI
+iPad 11 128 Wi-Fi 2025
+iPad 11 256 Wi-Fi 2025
+iPad 11 128 LTE 2025
+iPad 11 256 LTE 2025
+iPad Air 11 M3 128 Wi-FI 2025
+iPad Air 11 M3 256 Wi-FI 2025
+iPad Air 13 M3 128 Wi-FI 2025
+iPad Air 13 M3 256 Wi-FI 2025
+iPad Air 11 M3 128 LTE 2025
+iPad Air 11 M3 256 LTE 2025
+iPad Air 13 M3 128 LTE 2025
+iPad Air 13 M3 256 LTE 2025
 Steam Deck Oled 512
 Steam Deck Oled 1tb
 PS5 Slim Disk
