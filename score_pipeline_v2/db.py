@@ -13,6 +13,7 @@ async def select_batch(conn: asyncpg.Connection, regex_ver: int, score_ver: int,
       FROM nm_regex_result r
       WHERE r.ver = $1
         AND r.decision = ANY($2::text[])
+        AND r.category = 'ps5'
         AND NOT EXISTS (
           SELECT 1 FROM wb_score_result s
           WHERE s.nm_id = r.nm_id AND s.score_ver = $3

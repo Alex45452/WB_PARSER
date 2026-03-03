@@ -29,6 +29,27 @@ HARD_ACCESSORY = re.compile(
     re.IGNORECASE,
 )
 
+PS5_ACCESSORY = re.compile(
+    r"\b("
+    # RU
+    r"подставк|держател|органайзер|стойк|креплен|кронштейн|настенн"
+    r"|вентилятор|охладител|охлажден|кулер"
+    r"|винил|наклейк|стикер|skin|vinyl"
+    r"|зарядк|док-станц|докстанц|dock|charging"
+    r"|наушник|хедсет|headset"
+    r"|геймпад|джойстик|контроллер"
+    r"|диск(и|ов)|игр(ы|)|дисков"
+    r"|пылезащит|защит|пылевик|чехол|кейс"
+    # EN
+    r"|stand|holder|mount|wall\s*mount|organizer"
+    r"|fan|cooling|cooler"
+    r")\b",
+    re.IGNORECASE,
+)
+
+PS5_FOR_CUE = re.compile(r"\b(для\s*ps5|for\s*ps5|compatible|совместим)\b", re.IGNORECASE)
+PS5_CONSOLE_CUE = re.compile(r"\b(консоль|console)\b", re.IGNORECASE)
+
 # ---------- Anchors by category ----------
 ANCHORS = {
     "yandex_station": re.compile(r"\b(яндекс|yandex|алиса|станци)\b", re.IGNORECASE),
@@ -176,6 +197,23 @@ def compute_score(
                 explain["card_slots"] = _dump_card_slots(card_slots)
                 return ScoreResult(0.0, "reject", None, explain)
             explain["gates"]["ipad_air_bad_diagonal"] = False
+    
+    # PS5: accessories/parts killer
+    if category == "ps5":
+        t = title_norm
+        d = desc_norm
+
+        # Если явно аксессуарные слова — сразу reject
+        if PS5_ACCESSORY.search(t):
+            explain["gates"]["ps5_accessory_title"] = True
+            return ScoreResult(0.0, "reject", None, explain)
+        explain["gates"]["ps5_accessory_title"] = False
+
+        # Страховка: "для PS5 / compatible" и при этом нет "консоль" — почти всегда аксессуар
+        if (PS5_FOR_CUE.search(t) or PS5_FOR_CUE.search(d)) and not PS5_CONSOLE_CUE.search(t):
+            explain["gates"]["ps5_for_but_not_console"] = True
+            return ScoreResult(0.0, "reject", None, explain)
+        explain["gates"]["ps5_for_but_not_console"] = False
 
     # Choose best keyword profile
     best: Optional[KeywordProfile] = None
@@ -272,6 +310,7 @@ def compute_score(
     base = 0.70 if explain["anchors_in_title"] else 0.55
     score = base + 0.30 * best_ratio
     score = max(0.0, min(1.0, float(score)))
+
 
     # Decision rules (FP=0 bias):
     # accept only if strict slot match + model anchor hit in title
