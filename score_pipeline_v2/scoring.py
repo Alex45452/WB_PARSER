@@ -29,6 +29,10 @@ HARD_ACCESSORY = re.compile(
     re.IGNORECASE,
 )
 
+
+PS5_FOR_CUE = re.compile(r"\b(для\s*ps5|for\s*ps5|compatible|совместим)\b", re.IGNORECASE)
+PS5_CONSOLE_CUE = re.compile(r"\b(консоль|console)\b", re.IGNORECASE)
+# PS5: parts/accessories/games/service — hard reject
 PS5_ACCESSORY = re.compile(
     r"\b("
     # RU
@@ -43,12 +47,47 @@ PS5_ACCESSORY = re.compile(
     # EN
     r"|stand|holder|mount|wall\s*mount|organizer"
     r"|fan|cooling|cooler"
+
+    # --- cue words (почти всегда аксессуар/часть) ---
+    r"подход|совместим|compatible|for|replace|replacem|replacement|shell|housing|kit|set"
+    r"|oem|aftermark|custom"
+
+    # --- games / codes ---
+    r"|игр|game|games|карридж|код|code|dlc|активац|subscription|подписк|psn"
+
+    # --- controllers / input ---
+    r"|dualsense|dual\s*sense|controller|gamepad|pad\b|джойст|геймпад|контрол|trigger|button|stick|thumbstick"
+    r"|analog|аналог|кнопк|стик"
+
+    # --- docks / stands / mounts / storage ---
+    r"|dock|док|charg|заряд|stand|стойк|подстав|держател|holder|mount|крепл|кронштейн|wall"
+    r"|органайз|storage|хранен|полк|rack|case\b|bag|сумк|чехол|кейс"
+
+    # --- skins / stickers / lights ---
+    r"|skin|vinyl|wrap|наклейк|стикер|пленк|стекл|protect|защит"
+    r"|rgb|led|light|подсвет"
+
+    # --- cooling / dust ---
+    r"|fan|cool|cooler|охлажд|кулер|вентилят"
+    r"|dust|пыл|filter|фильтр|mesh|сетк|grill|решет"
+
+    # --- power / cables / ports ---
+    r"|psu|power\s*supply|питан|блок\s*питан|адаптер|adapter|charger|charging"
+    r"|cable|кабел|провод|hdmi|usb|type-?c|lan|ethernet|порт|port|разъем|разъём|jack"
+
+    # --- storage / drive / optical ---
+    r"|drive|disc\s*drive|привод|дисковод|лазер|laser|lens|линз"
+
+    # --- internals / electronics / repair ---
+    r"|motherboard|mainboard|board\b|pcb|плат|chip|ic\b|микросхем|контакт|конденс"
+    r"|flex|шлейф|лейф|connector|коннект|socket|слот"
+    r"|hdmi\s*port|usb\s*port|port\s*repair|repair|ремонт|замен|пайк|service|услуг"
+
+    # --- enclosure / faceplate / casing ---
+    r"|faceplate|plate|plates|панел|крышк|корпус|оболоч|cover\b|frame|рамк"
     r")\b",
     re.IGNORECASE,
 )
-
-PS5_FOR_CUE = re.compile(r"\b(для\s*ps5|for\s*ps5|compatible|совместим)\b", re.IGNORECASE)
-PS5_CONSOLE_CUE = re.compile(r"\b(консоль|console)\b", re.IGNORECASE)
 
 # ---------- Anchors by category ----------
 ANCHORS = {
