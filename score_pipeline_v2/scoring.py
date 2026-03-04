@@ -15,16 +15,16 @@ HARD_NON_ORIG = re.compile(
 # ---------- Hard reject: accessories / parts / services ----------
 HARD_ACCESSORY = re.compile(
     r"\b("
-    r"чехол|чехлы|кейс|case|cover|бампер|накладк|пленк|стекл|бронестекло|защитн|гидрогел"
-    r"|наклейк|стикер|skin|панель|корпус|крышк|задн(яя|ую)\s*панел|боков(ая|ую)\s*панел"
-    r"|держател|подставк|стенд|stand|кронштейн|ремеш(ок|к)|петля|strаp|strap"
+    r"чехол|чехлы|кейс|case|cover|бампер|накладк\w*|пленк\w*|стекл\w*|бронестекло|защитн\w*|гидрогел\w*"
+    r"|накле\w*|стикер|skin|панель|корпус|крышк\w*|задн(яя|ую)\s*панел\w*|боков(ая|ую)\s*панел\w*"
+    r"|держател\w*|подставк\w*|стенд|stand|кронштейн|ремеш(ок|к)|петля|strаp|strap"
     r"|стилус|pencil|пенсил|перо"
-    r"|клавиатур|keyboard|мыш(ь|ка)|трекпад|trackpad"
-    r"|кабель|провод|зарядк|адаптер|блок\s*питан|переходник|хаб|hub|dock|док"
-    r"|аккумулятор|батаре|powerbank|павербанк"
-    r"|шлейф|диспле|экран|тачскрин|разъем|камера|динамик|плата|контроллер|джойстик"
-    r"|ремонт|замена|услуг|страховк|подписк|dlc|код\s*(активац|пополнен)"
-    r"|муляж|макет|копия\s*коробк|коробк(а|и)\s*без\s*товара"
+    r"|клавиатур\w*|keyboard|мыш(ь|ка)|трекпад|trackpad"
+    r"|кабель|провод|зарядк\w*|адаптер|блок\s*питан|переходник|хаб|hub|dock|док"
+    r"|аккум\w*|батаре\w*|powerbank|павербанк"
+    r"|шлейф|диспле\w*|экран|тачскрин|разъем|камера|динамик|плата|контроллер|джойстик"
+    r"|ремонт|замена|услуг\w*|страховк\w*|подписк\w*|dlc|код\s*(активац\w*|пополнен\w*)"
+    r"|муляж|макет|копия\s*коробк\w*|коробк(а|и)\s*без\s*товара"
     r")\b",
     re.IGNORECASE,
 )
@@ -36,55 +36,55 @@ PS5_CONSOLE_CUE = re.compile(r"\b(консоль|console)\b", re.IGNORECASE)
 PS5_ACCESSORY = re.compile(
     r"\b("
     # RU
-    r"подставк|держател|органайзер|стойк|креплен|кронштейн|настенн"
-    r"|вентилятор|охладител|охлажден|кулер"
-    r"|винил|наклейк|стикер|skin|vinyl"
-    r"|зарядк|док-станц|докстанц|dock|charging"
+    r"подставк\w*|держател\w*|органайзер|стойк\w*|креплен\w*|кронштейн|настенн\w*"
+    r"|вентилятор|охладител\w*|охлажден\w*|кулер"
+    r"|винил|vinyl"
+    r"|зарядк\w*|док-станц|докстанц\w*|dock|charging"
     r"|наушник|хедсет|headset"
     r"|геймпад|джойстик|контроллер"
     r"|диск(и|ов)|игр(ы|)|дисков"
-    r"|пылезащит|защит|пылевик|чехол|кейс"
+    r"|пылезащит\w*|защит\w*|пылевик|чехол|кейс"
     # EN
     r"|stand|holder|mount|wall\s*mount|organizer"
     r"|fan|cooling|cooler"
 
     # --- cue words (почти всегда аксессуар/часть) ---
-    r"подход|совместим|compatible|for|replace|replacem|replacement|shell|housing|kit|set"
+    r"подход\w*|совместим|compatible|for|replace|replacem|replacement|shell|housing|kit|set"
     r"|oem|aftermark|custom"
 
     # --- games / codes ---
-    r"|игр|game|games|карридж|код|code|dlc|активац|subscription|подписк|psn"
+    r"|игр(а|)|game|games|карридж|код|code|dlc|активац\w*|subscription|подписк\w*|psn"
 
     # --- controllers / input ---
     r"|dualsense|dual\s*sense|controller|gamepad|pad\b|джойст|геймпад|контрол|trigger|button|stick|thumbstick"
-    r"|analog|аналог|кнопк|стик"
+    r"|analog|аналог|кнопк\w*|стик"
 
     # --- docks / stands / mounts / storage ---
     r"|dock|док|charg|заряд|stand|стойк|подстав|держател|holder|mount|крепл|кронштейн|wall"
-    r"|органайз|storage|хранен|полк|rack|case\b|bag|сумк|чехол|кейс"
+    r"|органайз|storage|хранен\w*|полк|rack|case\b|bag|сумк\w*|чехол|кейс"
 
     # --- skins / stickers / lights ---
-    r"|skin|vinyl|wrap|наклейк|стикер|пленк|стекл|protect|защит"
+    r"|skin|vinyl|wrap|наклейк\w*|стикер|пленк\w*|стекл\w*|protect|защит\w*"
     r"|rgb|led|light|подсвет"
 
     # --- cooling / dust ---
-    r"|fan|cool|cooler|охлажд|кулер|вентилят"
-    r"|dust|пыл|filter|фильтр|mesh|сетк|grill|решет"
+    r"|fan|cool|cooler|охлажд|кулер|вентилят\w*"
+    r"|dust|пыл\w*|filter|фильтр|mesh|сетк\w*|grill|решет\w*"
 
     # --- power / cables / ports ---
     r"|psu|power\s*supply|питан|блок\s*питан|адаптер|adapter|charger|charging"
     r"|cable|кабел|провод|hdmi|usb|type-?c|lan|ethernet|порт|port|разъем|разъём|jack"
 
     # --- storage / drive / optical ---
-    r"|drive|disc\s*drive|привод|дисковод|лазер|laser|lens|линз"
+    r"|drive|disc\s*drive|привод|дисковод|лазер|laser|lens|линз\w*"
 
     # --- internals / electronics / repair ---
-    r"|motherboard|mainboard|board\b|pcb|плат|chip|ic\b|микросхем|контакт|конденс"
-    r"|flex|шлейф|лейф|connector|коннект|socket|слот"
-    r"|hdmi\s*port|usb\s*port|port\s*repair|repair|ремонт|замен|пайк|service|услуг"
+    r"|motherboard|mainboard|board\b|pcb|плат|chip|ic\b|микросхем|контакт|конденс\w*"
+    r"|flex|шлейф|лейф|connector|коннект\w*|socket|слот"
+    r"|hdmi\s*port|usb\s*port|port\s*repair|repair|ремонт|замен\w*|пайк\w*|service|услуг\w*"
 
     # --- enclosure / faceplate / casing ---
-    r"|faceplate|plate|plates|панел|крышк|корпус|оболоч|cover\b|frame|рамк"
+    r"|faceplate|plate|plates|панел\w*|крышк\w*|корпус|оболоч\w*|cover\b|frame|рамк\w*"
     r")\b",
     re.IGNORECASE,
 )
