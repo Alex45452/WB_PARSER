@@ -39,9 +39,9 @@ PS5_ACCESSORY = re.compile(
     r"подставк\w*|держател\w*|органайзер|стойк\w*|креплен\w*|кронштейн|настенн\w*"
     r"|вентилятор|охладител\w*|охлажден\w*|кулер"
     r"|винил|vinyl"
-    r"|зарядк\w*|док-станц|докстанц\w*|dock|charging"
+    r"|заряд\w*|док-станц|докстанц\w*|dock|charging"
     r"|наушник|хедсет|headset"
-    r"|геймпад|джойстик|контроллер"
+    r"|контроллер|передач|база"
     r"|диск(и|ов)|игр(ы|)|дисков"
     r"|пылезащит\w*|защит\w*|пылевик|чехол|кейс"
     # EN
@@ -56,7 +56,7 @@ PS5_ACCESSORY = re.compile(
     r"|игр(а|)|game|games|карридж|код|code|dlc|активац\w*|subscription|подписк\w*|psn"
 
     # --- controllers / input ---
-    r"|dualsense|dual\s*sense|controller|gamepad|pad\b|джойст|геймпад|контрол|trigger|button|stick|thumbstick"
+    r"|dualsense|dual\s*sense|controller|gamepad|pad\b|джойст|контрол|trigger|button|stick|thumbstick"
     r"|analog|аналог|кнопк\w*|стик"
 
     # --- docks / stands / mounts / storage ---
@@ -76,7 +76,7 @@ PS5_ACCESSORY = re.compile(
     r"|cable|кабел|провод|hdmi|usb|type-?c|lan|ethernet|порт|port|разъем|разъём|jack"
 
     # --- storage / drive / optical ---
-    r"|drive|disc\s*drive|привод|дисковод|лазер|laser|lens|линз\w*"
+    r"|drive|disc\s*drive|привод|лазер|laser|lens|линз\w*"
 
     # --- internals / electronics / repair ---
     r"|motherboard|mainboard|board\b|pcb|плат|chip|ic\b|микросхем|контакт|конденс\w*"
