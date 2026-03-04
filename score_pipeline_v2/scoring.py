@@ -50,7 +50,7 @@ PS5_ACCESSORY = re.compile(
 
     # --- cue words (почти всегда аксессуар/часть) ---
     r"подход\w*|совместим|compatible|for|replace|replacem|replacement|shell|housing|kit|set"
-    r"|oem|aftermark|custom"
+    r"|oem|aftermark|custom|дисковод"
 
     # --- games / codes ---
     r"|игр(а|)|game|games|карридж|код|code|dlc|активац\w*|subscription|подписк\w*|psn"
