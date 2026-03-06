@@ -18,6 +18,7 @@ class Progress:
 
     # stage counters
     fast_reject: int = 0
+    fast_accessory_reject: int = 0
     category_not_mapped: int = 0
     supplier_reject: int = 0
     supplier_unparsed: int = 0
@@ -54,6 +55,7 @@ class Progress:
             "rate_cards_per_s": round(rate, 3),
 
             "fast_reject": self.fast_reject,
+            "fast_accessory_reject": self.fast_accessory_reject,
             "category_not_mapped": self.category_not_mapped,
             "supplier_reject": self.supplier_reject,
             "supplier_unparsed": self.supplier_unparsed,
