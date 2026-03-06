@@ -86,3 +86,26 @@ def extract_product_rating(feedbacks_raw: dict[str, Any]) -> float:
             return float(str(v).strip().replace(",", "."))
         except Exception:
             return 0.0
+        
+def extract_supplier_id(card: dict[str, Any]) -> int | None:
+    # common WB shapes
+    for path in (
+        ("selling", "supplier_id"),
+        ("data", "supplier_id"),
+        ("supplierId",),
+        ("supplier_id",),
+    ):
+        cur: Any = card
+        ok = True
+        for k in path:
+            if isinstance(cur, dict) and k in cur:
+                cur = cur[k]
+            else:
+                ok = False
+                break
+        if ok and cur is not None:
+            try:
+                return int(cur)
+            except Exception:
+                pass
+    return None

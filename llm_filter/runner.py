@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 import asyncio
 import json
 import logging
@@ -19,6 +20,8 @@ from .llm_client import LLMClient
 from .prompts import USER_TEMPLATE
 from .fast_reject import fast_accessory_reject
 
+
+# ---------- logging ----------
 
 def setup_json_logger() -> logging.Logger:
     logger = logging.getLogger("llm_filter")
@@ -41,6 +44,8 @@ def setup_json_logger() -> logging.Logger:
     return logger
 
 
+# ---------- SQL ----------
+
 SELECT_CANDIDATES_SQL = """
 with candidates as (
   select r.nm_id, r.category
@@ -50,16 +55,22 @@ with candidates as (
     and r.score >= $2
 )
 select c.nm_id, c.category,
-       w.basket, w.supplier_id, w.title, w.description, w.url
+       w.basket, w.title, w.description, w.url
 from candidates c
 join wb_cards w on w.nm_id = c.nm_id
 left join wb_llm_result l
   on l.nm_id = c.nm_id and l.llm_ver = $3
 where l.nm_id is null
+  and w.url is not null
 order by c.nm_id
 limit $4
 """
 
+UPDATE_SUPPLIER_ID_SQL = """
+update wb_cards
+set supplier_id = $2
+where nm_id = $1 and supplier_id is null
+"""
 
 INSERT_RESULT_SQL = """
 insert into wb_llm_result
@@ -87,13 +98,14 @@ on conflict (nm_id, llm_ver) do update set
   updated_at=now()
 """
 
-
-UPSERT_BLACKLIST_SQL = """
+UPSERT_LIST_SQL = """
 insert into wb_supplier_name_lists(list_name, exact_name, note)
-values ('blacklist', $1, $2)
-on conflict (list_name, exact_name) do nothing
+values ($1, $2, $3)
+on conflict (list_name, exact_name) do update set note = excluded.note
 """
 
+
+# ---------- helpers ----------
 
 def _short(text: str | None, limit: int) -> str | None:
     if text is None:
@@ -106,15 +118,98 @@ def build_user_payload(items: list[dict[str, Any]]) -> str:
     return USER_TEMPLATE + "\n" + json.dumps(items, ensure_ascii=False)
 
 
-def detect_model_conflict(title: str | None, desc: str | None, opt_model: str | None) -> bool:
+def norm_name(s: str) -> str:
+    return " ".join(s.strip().upper().split())
+
+
+def load_name_list_txt(path: str) -> set[str]:
+    out: set[str] = set()
+    with open(path, "r", encoding="utf-8") as f:
+        for raw in f:
+            s = raw.strip()
+            if not s or s.startswith("#"):
+                continue
+            out.add(norm_name(s))
+    return out
+
+
+def extract_supplier_id_from_card(card: dict[str, Any]) -> int | None:
+    # Common WB shapes
+    candidates = [
+        ("selling", "supplier_id"),
+        ("data", "supplier_id"),
+        ("supplierId",),
+        ("supplier_id",),
+    ]
+    for path in candidates:
+        cur: Any = card
+        ok = True
+        for k in path:
+            if isinstance(cur, dict) and k in cur:
+                cur = cur[k]
+            else:
+                ok = False
+                break
+        if ok and cur is not None:
+            try:
+                return int(cur)
+            except Exception:
+                pass
+    return None
+
+
+def detect_model_conflict(title: str | None, opt_model: str | None) -> bool:
+    # lightweight heuristic to push to fallback queue
     if not title or not opt_model:
         return False
     t = title.lower()
     o = opt_model.lower()
-    if o and (o[:6] not in t) and (o not in t):
-        return True
-    return False
+    return bool(o) and (o not in t) and (o[:6] not in t)
 
+
+# ---------- cached supplier checker wrapper ----------
+
+class CachedSupplierChecker:
+    """
+    Wraps SupplierChecker but caches whitelist/blacklist sets in memory,
+    so we don't hit DB per seller check.
+    """
+    def __init__(self, base: SupplierChecker, blacklist: set[str], whitelist: set[str]):
+        self.base = base
+        self.blacklist = blacklist
+        self.whitelist = whitelist
+
+    async def check(self, supplier_id: int):
+        # Call base to get seller name + (maybe) profile
+        # But we can short-circuit after name fetch if in list.
+        # We do: fetch name cached via base internals by calling its private cache method via check()
+        # The base.check already applies DB lists; however we also want in-memory lists.
+        # So we replicate the initial part: call base.check but override decision if needed.
+        dec = await self.base.check(supplier_id)
+
+        # base.check returns seller_name_norm in dec, apply our lists:
+        seller_name = dec.seller_name_norm or ""
+        if seller_name:
+            if seller_name in self.blacklist:
+                return dec.__class__(
+                    "blacklist_reject",
+                    "seller_name_blacklisted(file)",
+                    seller_name,
+                    dec.name_raw,
+                    dec.profile_raw,
+                )
+            if seller_name in self.whitelist:
+                return dec.__class__(
+                    "whitelist_pass",
+                    "seller_name_whitelisted(file)",
+                    seller_name,
+                    dec.name_raw,
+                    dec.profile_raw,
+                )
+        return dec
+
+
+# ---------- LLM runner ----------
 
 async def run_llm_and_store(
     db: DB,
@@ -126,8 +221,7 @@ async def run_llm_and_store(
     stats: Counter,
 ) -> list[dict[str, Any]]:
     """
-    Runs LLM, stores results.
-    Returns list of items that ended up as decision=review (for second-wave fallback).
+    Run LLM, store results, return list of items with decision=review (2nd-wave fallback).
     """
     payload = build_user_payload(batch)
     out = await llm.classify_batch(payload, retries=cfg.llm_retry)
@@ -157,21 +251,12 @@ async def run_llm_and_store(
         decision = r["decision"]
         stats[f"llm_{decision}"] += 1
 
-        signals = r.get("signals") or {}
-
-        # If authenticity risk => blacklist seller by exact name
-        auth_risk = bool(signals.get("authenticity_risk") or signals.get("not_original") or False)
-        if auth_risk:
-            seller_name = it["seller"].get("seller_name") or ""
-            if seller_name:
-                await db.execute(UPSERT_BLACKLIST_SQL, seller_name, f"auto_blacklist: nm_id={nm_id}")
-
         await db.execute(
             INSERT_RESULT_SQL,
             nm_id, cfg.llm_ver,
             "llm_done", it["seller"]["supplier_decision"], it["seller"]["supplier_reason"],
             decision, r["category"], r["target"], float(r["confidence"]), r["reject_reason"],
-            json.dumps(signals),
+            json.dumps(r.get("signals") or {}),
             json.dumps(r.get("explain") or {}),
             model_name, 1, None
         )
@@ -182,6 +267,8 @@ async def run_llm_and_store(
     return review_items
 
 
+# ---------- main ----------
+
 async def main() -> None:
     cfg = Config()
     logger = setup_json_logger()
@@ -189,17 +276,33 @@ async def main() -> None:
     db = DB(cfg.pg_dsn)
     await db.open()
 
-    # fixed targets parsing will be in updated targets.py below
-    targets = load_targets_by_categories(cfg.keywords_path).mapping
+    # paths (safe defaults)
+    keywords_path = getattr(cfg, "keywords_path", "./keywords_by_categories.yaml")
+    bl_path = getattr(cfg, "blacklist_path", "./blacklist_suppliers.txt")
+    wl_path = getattr(cfg, "whitelist_path", "./whitelist_suppliers.txt")
+
+    # load targets mapping
+    targets = load_targets_by_categories(keywords_path).mapping
+
+    # load and normalize supplier name lists from files
+    blacklist = load_name_list_txt(bl_path)
+    whitelist = load_name_list_txt(wl_path)
+
+    # upsert lists into DB for visibility/audit
+    # (and also in case other components read from DB)
+    for name in sorted(blacklist):
+        await db.execute(UPSERT_LIST_SQL, "blacklist", name, "from_file:blacklist_suppliers.txt")
+    for name in sorted(whitelist):
+        await db.execute(UPSERT_LIST_SQL, "whitelist", name, "from_file:whitelist_suppliers.txt")
 
     wb = WBHttp(
         timeout_s=cfg.wb_timeout_s,
         concurrency=cfg.wb_concurrency,
-        breaker_timeouts=20,   # 20 подряд таймаутов
-        breaker_sleep_s=120,   # пауза 2 минуты
+        breaker_timeouts=20,  # 20 подряд таймаутов
+        breaker_sleep_s=120,  # пауза 2 минуты
     )
 
-    supplier_checker = SupplierChecker(
+    base_supplier_checker = SupplierChecker(
         db=db, wb=wb,
         min_val=cfg.min_valuation,
         strict_min=cfg.strict_min, strict_max=cfg.strict_max,
@@ -210,16 +313,12 @@ async def main() -> None:
         strict_min_supp_ratio=80,
         strict_min_ratio_mark=2,
     )
+    supplier_checker = CachedSupplierChecker(base_supplier_checker, blacklist, whitelist)
 
     llm_main = LLMClient(api_key=cfg.openai_api_key, model=cfg.openai_model_main)
     llm_fb = LLMClient(api_key=cfg.openai_api_key, model=cfg.openai_model_fallback)
 
     stats = Counter()
-
-    # review queue for fallback:
-    # - model_conflict_hint
-    # - product_rating == 0 (strict mode)
-    # - main LLM returns review (second-wave)
     review_queue: list[dict[str, Any]] = []
 
     try:
@@ -266,9 +365,30 @@ async def main() -> None:
                     )
                     continue
 
-                supplier_id = int(r["supplier_id"])
-                sdec = await supplier_checker.check(supplier_id)
+                card_json_url = str(r["url"])  # wb_cards.url is card.json
 
+                # fetch card.json FIRST (we need supplier_id)
+                card = await fetch_card_json(wb, card_json_url)
+                supplier_id = extract_supplier_id_from_card(card)
+
+                if supplier_id is None:
+                    stats["missing_supplier_id_in_card"] += 1
+                    await db.execute(
+                        INSERT_RESULT_SQL,
+                        nm_id, cfg.llm_ver,
+                        "error", "reject", "missing_supplier_id_in_card_json",
+                        "review", category, None, 0.0, "missing_supplier_id",
+                        json.dumps({"card_url": card_json_url}),
+                        json.dumps({}),
+                        cfg.openai_model_main, 1, "supplier_id not found in card.json"
+                    )
+                    continue
+
+                # persist supplier_id back to wb_cards
+                await db.execute(UPDATE_SUPPLIER_ID_SQL, nm_id, int(supplier_id))
+
+                # seller check
+                sdec = await supplier_checker.check(int(supplier_id))
                 if sdec.decision in ("blacklist_reject", "reject"):
                     stats["supplier_reject"] += 1
                     await db.execute(
@@ -286,10 +406,7 @@ async def main() -> None:
                     )
                     continue
 
-                card_json_url = str(r["url"])  # confirmed: card.json URL in wb_cards.url
-
-                # enrich
-                card = await fetch_card_json(wb, card_json_url)
+                # enrich feedbacks/questions
                 imt_id = int(card.get("imt_id") or card.get("imtId") or 0)
                 opt_model = extract_model_from_options(card)
 
@@ -298,7 +415,7 @@ async def main() -> None:
 
                 # PRODUCT RATING FILTER:
                 # - rating > 0 and < 4.7 => reject
-                # - rating == 0 => strict mode => go to fallback queue (not reject)
+                # - rating == 0 => strict mode => fallback queue (not reject)
                 if product_rating > 0.0 and product_rating < 4.7:
                     stats["product_rating_reject"] += 1
                     await db.execute(
@@ -322,7 +439,7 @@ async def main() -> None:
                     "description": _short(r["description"], 900),
                     "product_rating": product_rating,
                     "seller": {
-                        "supplier_id": supplier_id,
+                        "supplier_id": int(supplier_id),
                         "seller_name": sdec.seller_name_norm,
                         "supplier_decision": sdec.decision,
                         "supplier_reason": sdec.reason,
@@ -341,24 +458,25 @@ async def main() -> None:
                     "questions": squeeze_questions(q_raw, limit=10),
                 }
 
-                # rating==0 strict mode: immediately to fallback queue
+                # strict mode for rating==0: immediately to fallback queue
                 if product_rating == 0.0:
                     stats["product_rating_zero_strict"] += 1
                     review_queue.append(item)
                     continue
 
                 # model conflict heuristic -> fallback queue
-                if detect_model_conflict(item["title"], item["description"], opt_model):
+                if detect_model_conflict(item["title"], opt_model):
                     stats["model_conflict_hint"] += 1
                     review_queue.append(item)
                 else:
                     batch_main.append(item)
 
-            # MAIN LLM pass
+            # MAIN LLM
             if batch_main:
                 main_review = await run_llm_and_store(
                     db, llm_main, cfg, logger, batch_main, cfg.openai_model_main, stats
                 )
+
                 # SECOND-WAVE: everything review -> fallback queue
                 if main_review:
                     stats["second_wave_review_to_fallback"] += len(main_review)
@@ -369,7 +487,7 @@ async def main() -> None:
                 extra={"extra": {"stats_top": stats.most_common(12), "review_queue_len": len(review_queue)}},
             )
 
-        # FALLBACK pass
+        # FALLBACK LLM for review queue
         fb_batch_size = max(4, min(8, cfg.llm_batch_size // 2))
         for i in range(0, len(review_queue), fb_batch_size):
             chunk = review_queue[i:i + fb_batch_size]
