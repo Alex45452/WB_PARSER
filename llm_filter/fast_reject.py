@@ -41,7 +41,7 @@ ANTI_RE = re.compile("|".join(ANTI_PATTERNS), re.IGNORECASE)
 SOFT_WORDS = {"джойстик","геймпад"}
 
 def fast_accessory_reject(title: str | None, description: str | None) -> tuple[bool, str | None]:
-    text = f"{title or ''}\n{description or ''}".lower()
+    text = f"{title or ''}".lower()
 
     m = ANTI_RE.search(text)
     if not m:
