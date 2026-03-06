@@ -34,7 +34,7 @@ def load_targets_by_categories(path: str) -> TargetsByCategory:
                 continue
 
             # "- target" YAML bullet
-            if line.startswith("- "):
+            if line.startswith(" - "):
                 if not cur_cat:
                     raise ValueError("Target before category header")
                 mapping[cur_cat].append(line[2:].strip())
