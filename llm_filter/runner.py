@@ -165,7 +165,7 @@ async def main() -> None:
     db = DB(cfg.pg_dsn)
     await db.open()
 
-    targets = load_targets_by_categories("/mnt/data/keywords_by_categories.txt").mapping
+    targets = load_targets_by_categories(cfg.keywords_path).mapping
 
     wb = WBHttp(
         timeout_s=cfg.wb_timeout_s,
