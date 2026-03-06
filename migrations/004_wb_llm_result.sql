@@ -35,7 +35,22 @@ create table if not exists wb_supplier_name_lists (
   primary key (list_name, exact_name)
 );
 
--- 4) LLM results with versioning + statuses
+-- 4) suppliers which cant be parsed through my endpoint on hand check
+
+create table if not exists wb_supplier_unparsed (
+  supplier_id bigint not null,
+  nm_id bigint not null,
+  card_url text not null,
+  reason text not null,
+  http_status integer,
+  created_at timestamptz not null default now(),
+  primary key (supplier_id, nm_id)
+);
+
+create index if not exists idx_wb_supplier_unparsed_created
+  on wb_supplier_unparsed (created_at desc);
+
+-- 5) LLM results with versioning + statuses
 create table if not exists wb_llm_result (
   nm_id bigint not null,
   llm_ver integer not null,

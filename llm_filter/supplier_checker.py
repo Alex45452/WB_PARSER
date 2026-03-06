@@ -1,7 +1,10 @@
 from __future__ import annotations
+
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Optional
+
+import httpx
 
 from .db import DB
 from .wb_http import WBHttp
@@ -12,11 +15,13 @@ PROFILE_URL = "https://suppliers-shipment-2.wildberries.ru/api/v1/suppliers/{sup
 
 @dataclass(frozen=True)
 class SupplierDecision:
-    decision: str  # pass|reject|whitelist_pass|blacklist_reject
+    # pass|reject|whitelist_pass|blacklist_reject|unparsed
+    decision: str
     reason: str
     seller_name_norm: str
     name_raw: dict[str, Any] | None
     profile_raw: dict[str, Any] | None
+    http_status: int | None = None
 
 
 def _norm_name(s: str) -> str:
@@ -34,6 +39,15 @@ def _parse_ts(s: str | None) -> Optional[datetime]:
         return None
 
 
+def _status_from_exc(e: Exception) -> int | None:
+    if isinstance(e, httpx.HTTPStatusError):
+        try:
+            return int(e.response.status_code)
+        except Exception:
+            return None
+    return None
+
+
 class SupplierChecker:
     def __init__(
         self,
@@ -45,12 +59,14 @@ class SupplierChecker:
         min_reviews: int,
         min_age_days: int,
         strict_age_days: int = 180,
-        strict_min_sales: int = 5000,   # "низкий" по умолчанию; можешь поменять env/config
+        strict_min_sales: int = 5000,
         strict_min_supp_ratio: int = 80,
-        strict_min_ratio_mark: int = 2,  # ratioMarkSupp <=1 => reject, значит min ok =2
+        strict_min_ratio_mark: int = 2,
+        supplier_id_whitelist: set[int] | None = None,
     ):
         self.db = db
         self.wb = wb
+
         self.min_val = min_val
         self.strict_min = strict_min
         self.strict_max = strict_max
@@ -61,6 +77,8 @@ class SupplierChecker:
         self.strict_min_sales = strict_min_sales
         self.strict_min_supp_ratio = strict_min_supp_ratio
         self.strict_min_ratio_mark = strict_min_ratio_mark
+
+        self.supplier_id_whitelist = supplier_id_whitelist or set()
 
     async def _get_lists(self) -> tuple[set[str], set[str]]:
         rows = await self.db.fetch("select list_name, exact_name from wb_supplier_name_lists")
@@ -81,7 +99,11 @@ class SupplierChecker:
         if row:
             return row["raw"]
 
-        raw = await self.wb.get_json(NAME_URL.format(supplier_id=supplier_id), timeout_retries=5, other_retries=10)
+        raw = await self.wb.get_json(
+            NAME_URL.format(supplier_id=supplier_id),
+            timeout_retries=5,
+            other_retries=10,
+        )
         await self.db.execute(
             "insert into wb_supplier_name_cache (supplier_id, trademark, supplier_name, supplier_full_name, raw) "
             "values ($1,$2,$3,$4,$5) "
@@ -134,18 +156,58 @@ class SupplierChecker:
         return raw
 
     async def check(self, supplier_id: int) -> SupplierDecision:
+        # ✅ supplier_id whitelist override (e.g. 28976)
+        if supplier_id in self.supplier_id_whitelist:
+            return SupplierDecision(
+                decision="whitelist_pass",
+                reason="supplier_id_whitelisted",
+                seller_name_norm="WILDBERRIES",
+                name_raw=None,
+                profile_raw=None,
+                http_status=None,
+            )
+
         bl, wl = await self._get_lists()
 
-        name_raw = await self._get_name_cached(supplier_id)
-        seller_name = (name_raw.get("trademark") or name_raw.get("supplierName") or name_raw.get("supplierFullName") or "")
+        # name fetch can 404 for special sellers -> mark as unparsed
+        try:
+            name_raw = await self._get_name_cached(supplier_id)
+        except Exception as e:
+            return SupplierDecision(
+                decision="unparsed",
+                reason=f"name_fetch_failed:{type(e).__name__}",
+                seller_name_norm="",
+                name_raw=None,
+                profile_raw=None,
+                http_status=_status_from_exc(e),
+            )
+
+        seller_name = (
+            name_raw.get("trademark")
+            or name_raw.get("supplierName")
+            or name_raw.get("supplierFullName")
+            or ""
+        )
         seller_name_norm = _norm_name(seller_name) if seller_name else ""
 
+        # name lists (DB)
         if seller_name_norm and seller_name_norm in bl:
             return SupplierDecision("blacklist_reject", "seller_name_blacklisted", seller_name_norm, name_raw, None)
         if seller_name_norm and seller_name_norm in wl:
             return SupplierDecision("whitelist_pass", "seller_name_whitelisted", seller_name_norm, name_raw, None)
 
-        profile_raw = await self._get_profile_cached(supplier_id)
+        # profile fetch might also fail
+        try:
+            profile_raw = await self._get_profile_cached(supplier_id)
+        except Exception as e:
+            return SupplierDecision(
+                decision="unparsed",
+                reason=f"profile_fetch_failed:{type(e).__name__}",
+                seller_name_norm=seller_name_norm,
+                name_raw=name_raw,
+                profile_raw=None,
+                http_status=_status_from_exc(e),
+            )
 
         valuation = float(profile_raw.get("valuationToHundredths") or profile_raw.get("valuation") or 0.0)
         feedbacks = int(profile_raw.get("feedbacksCount") or 0)
@@ -164,15 +226,26 @@ class SupplierChecker:
         if age_days < self.min_age_days:
             return SupplierDecision("reject", f"young_seller<{self.min_age_days}d", seller_name_norm, name_raw, profile_raw)
 
-        # strict band logic (your rule)
+        # strict band logic
         if self.strict_min <= valuation <= self.strict_max:
             if sales < self.strict_min_sales or age_days < self.strict_age_days:
-                return SupplierDecision("reject", f"strict_band_low_sales_or_young(sales={sales},age={age_days})", seller_name_norm, name_raw, profile_raw)
+                return SupplierDecision(
+                    "reject",
+                    f"strict_band_low_sales_or_young(sales={sales},age={age_days})",
+                    seller_name_norm,
+                    name_raw,
+                    profile_raw,
+                )
             if supp_ratio < self.strict_min_supp_ratio or ratio_mark <= 1:
-                return SupplierDecision("reject", f"strict_band_low_ratios(suppRatio={supp_ratio},ratioMark={ratio_mark})", seller_name_norm, name_raw, profile_raw)
+                return SupplierDecision(
+                    "reject",
+                    f"strict_band_low_ratios(suppRatio={supp_ratio},ratioMark={ratio_mark})",
+                    seller_name_norm,
+                    name_raw,
+                    profile_raw,
+                )
             return SupplierDecision("pass", f"strict_band_pass(valuation={valuation})", seller_name_norm, name_raw, profile_raw)
 
-        # main valuation check
         if valuation < self.min_val:
             return SupplierDecision("reject", f"low_valuation<{self.min_val} ({valuation})", seller_name_norm, name_raw, profile_raw)
 
