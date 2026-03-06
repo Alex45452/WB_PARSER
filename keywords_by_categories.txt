@@ -20,8 +20,6 @@ iPhone 17 256 eSim+eSim
 iPhone Air 1 TB
 iPhone Air 512
 iPhone Air 256
-
-
 ipad:
 iPad 11 128 Wi-Fi 2025
 iPad 11 256 Wi-Fi 2025
@@ -35,11 +33,9 @@ iPad Air 13 M3 256 Wi-FI 2025
 iPad Air 13 M3 128 Wi-FI 2025
 iPad Air 13 M3 128 LTE 2025
 iPad Air 13 M3 256 LTE 2025
-
 steam_deck:
 Steam Deck Oled 512
 Steam Deck Oled 1tb
-
 ps5:
 PS5 Slim Disk
 playstation 5 slim disk
@@ -47,7 +43,6 @@ PS5 Slim Digital
 playstation 5 slim digital
 Playstation 5 Pro
 PS5 Pro
-
 Samsung:
 Samsung Z fold7:
 Samsung Z Fold7 256
@@ -64,11 +59,9 @@ Samsung S25 Ultra 12/512
 Samsung A56 8/128
 Samsung A56 8/256
 Samsung A56 12/256
-
 huawei:
 Huawei Pura 80 Pro 12/512
 Huawei Pura 80 12/256
-
 yandex_station:
 Яндекс Макс
 Яндекс Дуо Макс
@@ -80,7 +73,6 @@ yandex_station:
 Яндекс Lite 2 с часами
 Яндекс лайт 2 с часами
 Яндекс стрит
-
 macbook:
 MacBook Air 13 M1 8/256 Space Gray
 MacBook Air 13 M1 8/256 Gold
