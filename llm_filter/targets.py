@@ -2,69 +2,80 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Dict, List
 
+
 @dataclass(frozen=True)
 class TargetsByCategory:
     mapping: Dict[str, List[str]]
 
+
 def load_targets_by_categories(path: str) -> TargetsByCategory:
     """
-    Expected format example:
-      CategoryName:
+    Supports:
+      iphone:
         - target1
         - target2
-    or any simple "category: target" lines.
-    We'll parse a tolerant format:
-      [category]
-      target
-      target
+
+    Also supports:
+      [iphone]
+      target1
+      target2
+
+    And:
+      iphone: target1
+      iphone: target2
     """
     mapping: Dict[str, List[str]] = {}
     cur_cat: str | None = None
 
     with open(path, "r", encoding="utf-8") as f:
         for raw in f:
-            line = raw.strip()
-            if not line or line.startswith("#"):
+            # Keep indentation for YAML detection, but we also need stripped
+            line = raw.rstrip("\n")
+            s = line.strip()
+
+            if not s or s.startswith("#"):
                 continue
 
-            # YAML-like "Category:"
-            if line.endswith(":") and len(line) > 1:
-                cur_cat = line[:-1].strip()
+            # INI-like section
+            if s.startswith("[") and s.endswith("]"):
+                cur_cat = s[1:-1].strip()
                 mapping.setdefault(cur_cat, [])
                 continue
 
-            # "- target" YAML bullet
-            if line.startswith(" - "):
+            # YAML header: "category:"
+            if s.endswith(":") and len(s) > 1 and ":" not in s[:-1]:
+                cur_cat = s[:-1].strip()
+                mapping.setdefault(cur_cat, [])
+                continue
+
+            # YAML bullet: "- target" (after strip)
+            if s.startswith("- "):
                 if not cur_cat:
-                    raise ValueError("Target before category header")
-                mapping[cur_cat].append(line[2:].strip())
+                    raise ValueError(f"Target before category header: {s}")
+                mapping[cur_cat].append(s[2:].strip())
                 continue
 
-            # INI-like "[Category]"
-            if line.startswith("[") and line.endswith("]"):
-                cur_cat = line[1:-1].strip()
-                mapping.setdefault(cur_cat, [])
-                continue
-
-            # "category: target" single line
-            if ":" in line and not line.startswith("http"):
-                left, right = line.split(":", 1)
+            # "category: target" one-liner
+            if ":" in s and not s.startswith("http"):
+                left, right = s.split(":", 1)
                 cat = left.strip()
                 tgt = right.strip()
-                mapping.setdefault(cat, []).append(tgt)
+                mapping.setdefault(cat, [])
+                if tgt:
+                    mapping[cat].append(tgt)
                 cur_cat = cat
                 continue
 
             # plain target line under current category
             if cur_cat:
-                mapping[cur_cat].append(line)
+                mapping[cur_cat].append(s)
             else:
-                raise ValueError(f"Unscoped target line: {line}")
+                raise ValueError(f"Unscoped target line: {s}")
 
-    # de-dup
+    # de-dup + cleanup
     for k in list(mapping.keys()):
         seen = set()
-        out = []
+        out: list[str] = []
         for t in mapping[k]:
             tt = t.strip()
             if tt and tt not in seen:

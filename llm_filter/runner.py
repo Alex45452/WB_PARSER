@@ -12,7 +12,8 @@ from .supplier_checker import SupplierChecker
 from .targets import load_targets_by_categories
 from .enrich import (
     fetch_card_json, fetch_feedbacks, fetch_questions,
-    squeeze_feedbacks, squeeze_questions, extract_model_from_options
+    squeeze_feedbacks, squeeze_questions, extract_model_from_options,
+    extract_product_rating,
 )
 from .llm_client import LLMClient
 from .prompts import USER_TEMPLATE
@@ -42,7 +43,7 @@ def setup_json_logger() -> logging.Logger:
 
 SELECT_CANDIDATES_SQL = """
 with candidates as (
-  select r.nm_id, r.category, r.target
+  select r.nm_id, r.category
   from wb_score_result r
   where r.score_ver = $1
     and r.decision = 'accept'
@@ -86,11 +87,13 @@ on conflict (nm_id, llm_ver) do update set
   updated_at=now()
 """
 
+
 UPSERT_BLACKLIST_SQL = """
 insert into wb_supplier_name_lists(list_name, exact_name, note)
 values ('blacklist', $1, $2)
 on conflict (list_name, exact_name) do nothing
 """
+
 
 def _short(text: str | None, limit: int) -> str | None:
     if text is None:
@@ -98,33 +101,45 @@ def _short(text: str | None, limit: int) -> str | None:
     t = text.strip()
     return t[:limit] if len(t) > limit else t
 
+
 def build_user_payload(items: list[dict[str, Any]]) -> str:
     return USER_TEMPLATE + "\n" + json.dumps(items, ensure_ascii=False)
 
+
 def detect_model_conflict(title: str | None, desc: str | None, opt_model: str | None) -> bool:
-    # лёгкая эвристика: если в title есть "m4/ps5 pro/2025/16/512" и в options явно другое — конфликт.
-    # Основной конфликт пусть ловит LLM, но на fallback очередь нам нужен триггер.
     if not title or not opt_model:
         return False
     t = title.lower()
     o = opt_model.lower()
-    # если opt_model вообще не встречается в title и сильно отличается — считаем конфликтом
     if o and (o[:6] not in t) and (o not in t):
         return True
     return False
 
-async def run_llm_and_store(db: DB, llm: LLMClient, cfg: Config, logger: logging.Logger,
-                            batch: list[dict[str, Any]], model_name: str,
-                            stats: Counter) -> None:
+
+async def run_llm_and_store(
+    db: DB,
+    llm: LLMClient,
+    cfg: Config,
+    logger: logging.Logger,
+    batch: list[dict[str, Any]],
+    model_name: str,
+    stats: Counter,
+) -> list[dict[str, Any]]:
+    """
+    Runs LLM, stores results.
+    Returns list of items that ended up as decision=review (for second-wave fallback).
+    """
     payload = build_user_payload(batch)
     out = await llm.classify_batch(payload, retries=cfg.llm_retry)
     results = out.get("results") or []
-
     idx = {int(r["nm_id"]): r for r in results if "nm_id" in r}
+
+    review_items: list[dict[str, Any]] = []
 
     for it in batch:
         nm_id = it["nm_id"]
         r = idx.get(nm_id)
+
         if not r:
             stats["llm_missing_item"] += 1
             await db.execute(
@@ -136,12 +151,15 @@ async def run_llm_and_store(db: DB, llm: LLMClient, cfg: Config, logger: logging
                 json.dumps({"note": "No item in LLM response for this nm_id"}),
                 model_name, 1, None
             )
+            review_items.append(it)
             continue
 
-        stats[f"llm_{r['decision']}"] += 1
+        decision = r["decision"]
+        stats[f"llm_{decision}"] += 1
 
-        # If authenticity risk => blacklist seller
         signals = r.get("signals") or {}
+
+        # If authenticity risk => blacklist seller by exact name
         auth_risk = bool(signals.get("authenticity_risk") or signals.get("not_original") or False)
         if auth_risk:
             seller_name = it["seller"].get("seller_name") or ""
@@ -152,11 +170,17 @@ async def run_llm_and_store(db: DB, llm: LLMClient, cfg: Config, logger: logging
             INSERT_RESULT_SQL,
             nm_id, cfg.llm_ver,
             "llm_done", it["seller"]["supplier_decision"], it["seller"]["supplier_reason"],
-            r["decision"], r["category"], r["target"], float(r["confidence"]), r["reject_reason"],
+            decision, r["category"], r["target"], float(r["confidence"]), r["reject_reason"],
             json.dumps(signals),
             json.dumps(r.get("explain") or {}),
             model_name, 1, None
         )
+
+        if decision == "review":
+            review_items.append(it)
+
+    return review_items
+
 
 async def main() -> None:
     cfg = Config()
@@ -165,13 +189,14 @@ async def main() -> None:
     db = DB(cfg.pg_dsn)
     await db.open()
 
+    # fixed targets parsing will be in updated targets.py below
     targets = load_targets_by_categories(cfg.keywords_path).mapping
 
     wb = WBHttp(
         timeout_s=cfg.wb_timeout_s,
         concurrency=cfg.wb_concurrency,
-        breaker_timeouts=20,
-        breaker_sleep_s=120
+        breaker_timeouts=20,   # 20 подряд таймаутов
+        breaker_sleep_s=120,   # пауза 2 минуты
     )
 
     supplier_checker = SupplierChecker(
@@ -183,13 +208,18 @@ async def main() -> None:
         strict_age_days=180,
         strict_min_sales=5000,
         strict_min_supp_ratio=80,
-        strict_min_ratio_mark=2
+        strict_min_ratio_mark=2,
     )
 
     llm_main = LLMClient(api_key=cfg.openai_api_key, model=cfg.openai_model_main)
     llm_fb = LLMClient(api_key=cfg.openai_api_key, model=cfg.openai_model_fallback)
 
     stats = Counter()
+
+    # review queue for fallback:
+    # - model_conflict_hint
+    # - product_rating == 0 (strict mode)
+    # - main LLM returns review (second-wave)
     review_queue: list[dict[str, Any]] = []
 
     try:
@@ -256,18 +286,32 @@ async def main() -> None:
                     )
                     continue
 
-                card_json_url = str(r["url"])  # confirmed: card.json
+                card_json_url = str(r["url"])  # confirmed: card.json URL in wb_cards.url
 
                 # enrich
-                card = await fetch_card_json(
-                    wb,
-                    card_json_url
-                )
-
+                card = await fetch_card_json(wb, card_json_url)
                 imt_id = int(card.get("imt_id") or card.get("imtId") or 0)
                 opt_model = extract_model_from_options(card)
 
                 fb_raw = await fetch_feedbacks(wb, imt_id) if imt_id else {}
+                product_rating = extract_product_rating(fb_raw)
+
+                # PRODUCT RATING FILTER:
+                # - rating > 0 and < 4.7 => reject
+                # - rating == 0 => strict mode => go to fallback queue (not reject)
+                if product_rating > 0.0 and product_rating < 4.7:
+                    stats["product_rating_reject"] += 1
+                    await db.execute(
+                        INSERT_RESULT_SQL,
+                        nm_id, cfg.llm_ver,
+                        "llm_done", sdec.decision, sdec.reason,
+                        "reject", category, None, 0.98, "low_product_rating",
+                        json.dumps({"product_rating": product_rating, "rule": "rating<4.7"}),
+                        json.dumps({}),
+                        cfg.openai_model_main, 1, None
+                    )
+                    continue
+
                 q_raw = await fetch_questions(wb, imt_id, take=30, skip=0) if imt_id else {}
 
                 item = {
@@ -276,6 +320,7 @@ async def main() -> None:
                     "allowed_targets": allowed,
                     "title": _short(r["title"], 260),
                     "description": _short(r["description"], 900),
+                    "product_rating": product_rating,
                     "seller": {
                         "supplier_id": supplier_id,
                         "seller_name": sdec.seller_name_norm,
@@ -296,34 +341,41 @@ async def main() -> None:
                     "questions": squeeze_questions(q_raw, limit=10),
                 }
 
-                # If whitelist seller: allow main model, but still can go review later
-                # If model conflict heuristic => push to review queue for fallback model
+                # rating==0 strict mode: immediately to fallback queue
+                if product_rating == 0.0:
+                    stats["product_rating_zero_strict"] += 1
+                    review_queue.append(item)
+                    continue
+
+                # model conflict heuristic -> fallback queue
                 if detect_model_conflict(item["title"], item["description"], opt_model):
                     stats["model_conflict_hint"] += 1
                     review_queue.append(item)
                 else:
                     batch_main.append(item)
 
+            # MAIN LLM pass
             if batch_main:
-                await run_llm_and_store(db, llm_main, cfg, logger, batch_main, cfg.openai_model_main, stats)
+                main_review = await run_llm_and_store(
+                    db, llm_main, cfg, logger, batch_main, cfg.openai_model_main, stats
+                )
+                # SECOND-WAVE: everything review -> fallback queue
+                if main_review:
+                    stats["second_wave_review_to_fallback"] += len(main_review)
+                    review_queue.extend(main_review)
 
-            # periodic log
             logger.info(
                 "batch_done",
-                extra={
-                    "extra": {
-                        "stats_top": stats.most_common(10),
-                        "review_queue_len": len(review_queue),
-                    }
-                }
+                extra={"extra": {"stats_top": stats.most_common(12), "review_queue_len": len(review_queue)}},
             )
 
-        # SECOND PASS: fallback model for review queue
-        # chunk smaller to keep context safe
+        # FALLBACK pass
         fb_batch_size = max(4, min(8, cfg.llm_batch_size // 2))
         for i in range(0, len(review_queue), fb_batch_size):
             chunk = review_queue[i:i + fb_batch_size]
-            await run_llm_and_store(db, llm_fb, cfg, logger, chunk, cfg.openai_model_fallback, stats)
+            await run_llm_and_store(
+                db, llm_fb, cfg, logger, chunk, cfg.openai_model_fallback, stats
+            )
 
         logger.info("done", extra={"extra": {"stats_all": stats.most_common(50)}})
 
