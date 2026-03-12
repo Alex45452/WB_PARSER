@@ -23,16 +23,19 @@ class Progress:
     supplier_reject: int = 0
     supplier_unparsed: int = 0
     card_fetch_error: int = 0
-    missing_supplier_id: int = 0
+    missing_supplier_id_in_card: int = 0
+
     product_rating_reject: int = 0
-    rating_zero_strict: int = 0
-    model_conflict_to_fallback: int = 0
+    product_rating_zero_strict: int = 0
+
+    model_conflict_hint: int = 0
 
     # llm
     llm_calls_main: int = 0
     llm_calls_fallback: int = 0
     llm_items_main: int = 0
     llm_items_fallback: int = 0
+    llm_missing_item: int = 0
 
     # decisions
     llm_accept: int = 0
@@ -57,18 +60,21 @@ class Progress:
             "fast_reject": self.fast_reject,
             "fast_accessory_reject": self.fast_accessory_reject,
             "category_not_mapped": self.category_not_mapped,
+
             "supplier_reject": self.supplier_reject,
             "supplier_unparsed": self.supplier_unparsed,
             "card_fetch_error": self.card_fetch_error,
-            "missing_supplier_id": self.missing_supplier_id,
+            "missing_supplier_id_in_card": self.missing_supplier_id_in_card,
+
             "product_rating_reject": self.product_rating_reject,
-            "rating_zero_strict": self.rating_zero_strict,
-            "model_conflict_to_fallback": self.model_conflict_to_fallback,
+            "product_rating_zero_strict": self.product_rating_zero_strict,
+            "model_conflict_hint": self.model_conflict_hint,
 
             "llm_calls_main": self.llm_calls_main,
             "llm_calls_fallback": self.llm_calls_fallback,
             "llm_items_main": self.llm_items_main,
             "llm_items_fallback": self.llm_items_fallback,
+            "llm_missing_item": self.llm_missing_item,
 
             "llm_accept": self.llm_accept,
             "llm_reject": self.llm_reject,
@@ -88,10 +94,12 @@ class ProgressReporter:
 
     async def start(self) -> None:
         import asyncio
+
         async def loop():
             while not self._stop:
                 await asyncio.sleep(self.every_s)
                 log(self.logger, self.lctx, "progress", **self.progress.snapshot())
+
         self._task = asyncio.create_task(loop())
 
     async def stop(self) -> None:
