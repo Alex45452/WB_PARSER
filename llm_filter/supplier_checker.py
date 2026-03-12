@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Optional
@@ -49,6 +50,13 @@ def _status_from_exc(e: Exception) -> int | None:
 
 
 class SupplierChecker:
+    """
+    Seller-check rules:
+      - blacklist/whitelist by exact name (from DB table wb_supplier_name_lists)
+      - optional whitelist by supplier_id (e.g. 28976)
+      - if name endpoint fails, we still try profile endpoint
+      - DataError fix: store raw jsonb via json.dumps + ::jsonb cast
+    """
     def __init__(
         self,
         db: DB,
@@ -104,16 +112,20 @@ class SupplierChecker:
             timeout_retries=5,
             other_retries=10,
         )
+
+        # ✅ IMPORTANT: store JSON as jsonb safely (prevents asyncpg DataError)
+        raw_json = json.dumps(raw, ensure_ascii=False)
+
         await self.db.execute(
             "insert into wb_supplier_name_cache (supplier_id, trademark, supplier_name, supplier_full_name, raw) "
-            "values ($1,$2,$3,$4,$5) "
+            "values ($1,$2,$3,$4,$5::jsonb) "
             "on conflict (supplier_id) do update set raw=excluded.raw, fetched_at=now(), "
             "trademark=excluded.trademark, supplier_name=excluded.supplier_name, supplier_full_name=excluded.supplier_full_name",
             supplier_id,
             raw.get("trademark"),
             raw.get("supplierName"),
             raw.get("supplierFullName"),
-            raw,
+            raw_json,
         )
         return raw
 
@@ -133,11 +145,14 @@ class SupplierChecker:
             other_retries=10,
         )
 
+        # ✅ IMPORTANT: store JSON as jsonb safely (prevents asyncpg DataError)
+        raw_json = json.dumps(raw, ensure_ascii=False)
+
         reg_dt = _parse_ts(raw.get("registrationDate"))
         await self.db.execute(
             "insert into wb_supplier_profile_cache "
             "(supplier_id, valuation, feedbacks_count, registration_date, sale_item_quantity, rating, supp_ratio, ratio_mark_supp, delivery_duration, raw) "
-            "values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) "
+            "values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb) "
             "on conflict (supplier_id) do update set raw=excluded.raw, fetched_at=now(), "
             "valuation=excluded.valuation, feedbacks_count=excluded.feedbacks_count, registration_date=excluded.registration_date, "
             "sale_item_quantity=excluded.sale_item_quantity, rating=excluded.rating, supp_ratio=excluded.supp_ratio, "
@@ -151,64 +166,16 @@ class SupplierChecker:
             int(raw.get("suppRatio") or 0),
             int(raw.get("ratioMarkSupp") or 0),
             float(raw.get("deliveryDuration") or 0.0),
-            raw,
+            raw_json,
         )
         return raw
 
-    async def check(self, supplier_id: int) -> SupplierDecision:
-        # ✅ supplier_id whitelist override (e.g. 28976)
-        if supplier_id in self.supplier_id_whitelist:
-            return SupplierDecision(
-                decision="whitelist_pass",
-                reason="supplier_id_whitelisted",
-                seller_name_norm="WILDBERRIES",
-                name_raw=None,
-                profile_raw=None,
-                http_status=None,
-            )
-
-        bl, wl = await self._get_lists()
-
-        # name fetch can 404 for special sellers -> mark as unparsed
-        try:
-            name_raw = await self._get_name_cached(supplier_id)
-        except Exception as e:
-            return SupplierDecision(
-                decision="unparsed",
-                reason=f"name_fetch_failed:{type(e).__name__}",
-                seller_name_norm="",
-                name_raw=None,
-                profile_raw=None,
-                http_status=_status_from_exc(e),
-            )
-
-        seller_name = (
-            name_raw.get("trademark")
-            or name_raw.get("supplierName")
-            or name_raw.get("supplierFullName")
-            or ""
-        )
-        seller_name_norm = _norm_name(seller_name) if seller_name else ""
-
-        # name lists (DB)
-        if seller_name_norm and seller_name_norm in bl:
-            return SupplierDecision("blacklist_reject", "seller_name_blacklisted", seller_name_norm, name_raw, None)
-        if seller_name_norm and seller_name_norm in wl:
-            return SupplierDecision("whitelist_pass", "seller_name_whitelisted", seller_name_norm, name_raw, None)
-
-        # profile fetch might also fail
-        try:
-            profile_raw = await self._get_profile_cached(supplier_id)
-        except Exception as e:
-            return SupplierDecision(
-                decision="unparsed",
-                reason=f"profile_fetch_failed:{type(e).__name__}",
-                seller_name_norm=seller_name_norm,
-                name_raw=name_raw,
-                profile_raw=None,
-                http_status=_status_from_exc(e),
-            )
-
+    def _apply_profile_rules(
+        self,
+        seller_name_norm: str,
+        name_raw: dict[str, Any] | None,
+        profile_raw: dict[str, Any],
+    ) -> SupplierDecision:
         valuation = float(profile_raw.get("valuationToHundredths") or profile_raw.get("valuation") or 0.0)
         feedbacks = int(profile_raw.get("feedbacksCount") or 0)
         sales = int(profile_raw.get("saleItemQuantity") or 0)
@@ -226,7 +193,7 @@ class SupplierChecker:
         if age_days < self.min_age_days:
             return SupplierDecision("reject", f"young_seller<{self.min_age_days}d", seller_name_norm, name_raw, profile_raw)
 
-        # strict band logic
+        # strict band logic (4.50..4.69 by default)
         if self.strict_min <= valuation <= self.strict_max:
             if sales < self.strict_min_sales or age_days < self.strict_age_days:
                 return SupplierDecision(
@@ -250,3 +217,68 @@ class SupplierChecker:
             return SupplierDecision("reject", f"low_valuation<{self.min_val} ({valuation})", seller_name_norm, name_raw, profile_raw)
 
         return SupplierDecision("pass", "ok", seller_name_norm, name_raw, profile_raw)
+
+    async def check(self, supplier_id: int) -> SupplierDecision:
+        # ✅ supplier_id whitelist override (e.g. 28976)
+        # NOTE: still should go to LLM; this only prevents seller-based reject.
+        if supplier_id in self.supplier_id_whitelist:
+            return SupplierDecision(
+                decision="whitelist_pass",
+                reason="supplier_id_whitelisted",
+                seller_name_norm="WILDBERRIES",
+                name_raw=None,
+                profile_raw=None,
+                http_status=None,
+            )
+
+        bl, wl = await self._get_lists()
+
+        name_raw: dict[str, Any] | None = None
+        seller_name_norm: str = ""
+        name_err: Exception | None = None
+        name_http: int | None = None
+
+        # 1) try name (can 404 for special sellers)
+        try:
+            name_raw = await self._get_name_cached(supplier_id)
+            seller_name = (
+                name_raw.get("trademark")
+                or name_raw.get("supplierName")
+                or name_raw.get("supplierFullName")
+                or ""
+            )
+            seller_name_norm = _norm_name(seller_name) if seller_name else ""
+        except Exception as e:
+            name_err = e
+            name_http = _status_from_exc(e)
+            name_raw = None
+            seller_name_norm = ""
+
+        # 2) if we got name, apply name lists
+        if seller_name_norm:
+            if seller_name_norm in bl:
+                return SupplierDecision("blacklist_reject", "seller_name_blacklisted", seller_name_norm, name_raw, None)
+            if seller_name_norm in wl:
+                return SupplierDecision("whitelist_pass", "seller_name_whitelisted", seller_name_norm, name_raw, None)
+
+        # 3) Always try profile (even if name failed)
+        try:
+            profile_raw = await self._get_profile_cached(supplier_id)
+            # apply profile rules even if name missing
+            return self._apply_profile_rules(seller_name_norm, name_raw, profile_raw)
+        except Exception as e:
+            # 4) If name failed AND profile failed -> unparsed
+            reason_bits = []
+            if name_err is not None:
+                reason_bits.append(f"name_fetch_failed:{type(name_err).__name__}")
+            reason_bits.append(f"profile_fetch_failed:{type(e).__name__}")
+            reason = ";".join(reason_bits) if reason_bits else "seller_fetch_failed"
+            http_status = _status_from_exc(e) or name_http
+            return SupplierDecision(
+                decision="unparsed",
+                reason=reason,
+                seller_name_norm=seller_name_norm,
+                name_raw=name_raw,
+                profile_raw=None,
+                http_status=http_status,
+            )

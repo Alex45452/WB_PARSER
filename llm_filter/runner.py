@@ -174,8 +174,8 @@ def detect_model_conflict(title: str | None, opt_model: str | None) -> bool:
 
 class CachedSupplierChecker:
     """
-    SupplierChecker uses DB name lists; we additionally keep file-based lists in memory,
-    and also supports whitelist by supplier_id via SupplierChecker itself.
+    Base SupplierChecker uses DB name lists. We additionally keep file-based lists in memory.
+    NOTE: whitelist does NOT skip LLM; it only affects seller decision.
     """
     def __init__(self, base: SupplierChecker, blacklist: set[str], whitelist: set[str]):
         self.base = base
@@ -220,10 +220,6 @@ async def run_llm_and_store(
     progress: Progress,
     llm_kind: str,  # "main" | "fallback"
 ) -> list[dict[str, Any]]:
-    """
-    Run LLM, store results, return list of items with decision=review (2nd-wave fallback).
-    Also updates progress counters.
-    """
     t = StepTimer()
 
     if llm_kind == "main":
@@ -267,7 +263,6 @@ async def run_llm_and_store(
         decision = r["decision"]
         stats[f"llm_{decision}"] += 1
 
-        # progress decision counters
         if decision == "accept":
             progress.inc("llm_accept", 1)
         elif decision == "reject":
@@ -328,7 +323,7 @@ async def main() -> None:
     supplier_id_whitelist = {28976}
     supplier_id_whitelist |= parse_id_set(os.environ.get("SUPPLIER_ID_WHITELIST"))
 
-    # progress
+    # progress reporter
     progress = Progress()
     reporter = ProgressReporter(
         logger, lctx, progress,
@@ -387,7 +382,6 @@ async def main() -> None:
                 break
 
             progress.inc("fetched_from_db", len(rows))
-
             batch_no += 1
             log(logger, lctx, "batch_start", batch_no=batch_no, n_rows=len(rows))
 
@@ -395,7 +389,6 @@ async def main() -> None:
             batch_timer = StepTimer()
 
             for r in rows:
-                # count every candidate as processed (even if it fast-rejects)
                 progress.inc("processed_total", 1)
 
                 nm_id = int(r["nm_id"])
@@ -407,7 +400,6 @@ async def main() -> None:
                 if not allowed:
                     stats["category_not_mapped"] += 1
                     progress.inc("category_not_mapped", 1)
-                    log(logger, lctx, "category_not_mapped", nm_id=nm_id, category=category)
                     await db.execute(
                         INSERT_RESULT_SQL,
                         nm_id, cfg.llm_ver,
@@ -424,7 +416,6 @@ async def main() -> None:
                 if is_rej:
                     stats["fast_accessory_reject"] += 1
                     progress.inc("fast_accessory_reject", 1)
-                    log(logger, lctx, "fast_reject", nm_id=nm_id, category=category, reason=reason)
                     await db.execute(
                         INSERT_RESULT_SQL,
                         nm_id, cfg.llm_ver,
@@ -437,14 +428,11 @@ async def main() -> None:
                     continue
 
                 card_json_url = str(r["url"])
-                log(logger, lctx, "card_fetch_start", nm_id=nm_id, url=card_json_url)
-
                 try:
                     card = await fetch_card_json(wb, card_json_url)
                 except Exception:
                     stats["card_fetch_error"] += 1
                     progress.inc("card_fetch_error", 1)
-                    log_err(logger, lctx, "card_fetch_error", nm_id=nm_id, url=card_json_url)
                     await db.execute(
                         INSERT_RESULT_SQL,
                         nm_id, cfg.llm_ver,
@@ -460,7 +448,6 @@ async def main() -> None:
                 if supplier_id is None:
                     stats["missing_supplier_id_in_card"] += 1
                     progress.inc("missing_supplier_id_in_card", 1)
-                    log_err(logger, lctx, "missing_supplier_id_in_card", nm_id=nm_id, url=card_json_url)
                     await db.execute(
                         INSERT_RESULT_SQL,
                         nm_id, cfg.llm_ver,
@@ -478,16 +465,11 @@ async def main() -> None:
                 # seller check
                 sdec = await supplier_checker.check(int(supplier_id))
 
+                # ✅ IMPORTANT: even if unparsed -> STILL go to LLM.
                 if sdec.decision == "unparsed":
                     stats["supplier_unparsed"] += 1
                     progress.inc("supplier_unparsed", 1)
-                    log(
-                        logger, lctx, "supplier_unparsed",
-                        nm_id=nm_id,
-                        supplier_id=int(supplier_id),
-                        reason=sdec.reason,
-                        http_status=sdec.http_status,
-                    )
+
                     await db.execute(
                         INSERT_UNPARSED_SUPPLIER_SQL,
                         int(supplier_id),
@@ -496,29 +478,12 @@ async def main() -> None:
                         sdec.reason,
                         sdec.http_status,
                     )
-                    await db.execute(
-                        INSERT_RESULT_SQL,
-                        nm_id, cfg.llm_ver,
-                        "error", "reject", sdec.reason,
-                        "review", category, None, 0.0, "supplier_name_unavailable",
-                        json.dumps({"supplier_id": int(supplier_id), "card_url": card_json_url, "reason": sdec.reason, "http_status": sdec.http_status}),
-                        json.dumps({}),
-                        cfg.openai_model_main, 1, sdec.reason
-                    )
-                    continue
+                    # Do NOT continue.
 
+                # seller reject still stops (unless you want also ignore it; you didn't ask)
                 if sdec.decision in ("blacklist_reject", "reject"):
                     stats["supplier_reject"] += 1
                     progress.inc("supplier_reject", 1)
-                    log(
-                        logger, lctx, "supplier_reject",
-                        nm_id=nm_id,
-                        supplier_id=int(supplier_id),
-                        seller_name=sdec.seller_name_norm,
-                        supplier_decision=sdec.decision,
-                        reason=sdec.reason,
-                        elapsed_ms=card_timer.ms(),
-                    )
                     await db.execute(
                         INSERT_RESULT_SQL,
                         nm_id, cfg.llm_ver,
@@ -541,18 +506,9 @@ async def main() -> None:
                 fb_raw = await fetch_feedbacks(wb, imt_id) if imt_id else {}
                 product_rating = extract_product_rating(fb_raw)
 
-                # rating filter
                 if product_rating > 0.0 and product_rating < 4.7:
                     stats["product_rating_reject"] += 1
                     progress.inc("product_rating_reject", 1)
-                    log(
-                        logger, lctx, "product_rating_reject",
-                        nm_id=nm_id,
-                        supplier_id=int(supplier_id),
-                        imt_id=imt_id,
-                        product_rating=product_rating,
-                        elapsed_ms=card_timer.ms(),
-                    )
                     await db.execute(
                         INSERT_RESULT_SQL,
                         nm_id, cfg.llm_ver,
@@ -575,7 +531,7 @@ async def main() -> None:
                     "product_rating": product_rating,
                     "seller": {
                         "supplier_id": int(supplier_id),
-                        "seller_name": sdec.seller_name_norm,
+                        "seller_name": sdec.seller_name_norm or None,
                         "supplier_decision": sdec.decision,
                         "supplier_reason": sdec.reason,
                         "profile": sdec.profile_raw and {
@@ -593,31 +549,17 @@ async def main() -> None:
                     "questions": squeeze_questions(q_raw, limit=10),
                 }
 
-                log(
-                    logger, lctx, "card_enriched",
-                    nm_id=nm_id,
-                    supplier_id=int(supplier_id),
-                    imt_id=imt_id,
-                    product_rating=product_rating,
-                    model_option=opt_model,
-                    supplier_decision=sdec.decision,
-                    elapsed_ms=card_timer.ms(),
-                )
-
                 # strict mode: rating==0 -> fallback queue
                 if product_rating == 0.0:
                     stats["product_rating_zero_strict"] += 1
                     progress.inc("product_rating_zero_strict", 1)
                     review_queue.append(item)
-                    log(logger, lctx, "strict_rating_zero_to_fallback", nm_id=nm_id, supplier_id=int(supplier_id))
                     continue
 
-                # model conflict -> fallback
                 if detect_model_conflict(item["title"], opt_model):
                     stats["model_conflict_hint"] += 1
                     progress.inc("model_conflict_hint", 1)
                     review_queue.append(item)
-                    log(logger, lctx, "model_conflict_to_fallback", nm_id=nm_id, supplier_id=int(supplier_id))
                 else:
                     batch_main.append(item)
 
@@ -630,20 +572,11 @@ async def main() -> None:
                 if main_review:
                     stats["second_wave_review_to_fallback"] += len(main_review)
                     review_queue.extend(main_review)
-                    log(logger, lctx, "second_wave_enqueue", n_items=len(main_review))
 
-            log(
-                logger, lctx, "batch_done",
-                batch_no=batch_no,
-                batch_elapsed_ms=batch_timer.ms(),
-                stats_top=stats.most_common(12),
-                review_queue_len=len(review_queue),
-            )
+            log(logger, lctx, "batch_done", batch_no=batch_no, elapsed_ms=batch_timer.ms())
 
         # fallback llm
         fb_batch_size = max(4, min(8, cfg.llm_batch_size // 2))
-        log(logger, lctx, "fallback_start", n_items=len(review_queue), fb_batch_size=fb_batch_size)
-
         for i in range(0, len(review_queue), fb_batch_size):
             chunk = review_queue[i:i + fb_batch_size]
             await run_llm_and_store(
@@ -654,10 +587,8 @@ async def main() -> None:
         log(logger, lctx, "done", stats_all=stats.most_common(50))
 
     finally:
-        # stop reporter and print final snapshot
         await reporter.stop()
         log(logger, lctx, "final", **progress.snapshot())
-
         await wb.close()
         await db.close()
 
